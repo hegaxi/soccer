@@ -29,7 +29,7 @@ export default function Highlights() {
             ? 'Ranking general: valor técnico de la jugada, reacción de los usuarios y pico de audio.'
             : 'Ranking de reclutamiento: lo que pesa para un visor — relevancia para la posición, calidad, nivel del rival y contexto.'}</div></div>
         <div className="fila">
-          <div className="pestanas" style={{ margin: 0, border: 0 }}>
+          <div className="segmento">
             <button className={modo === 'GENERAL' ? 'activa' : ''} onClick={() => setModo('GENERAL')}>General</button>
             <button className={modo === 'RECLUTAMIENTO' ? 'activa' : ''} onClick={() => setModo('RECLUTAMIENTO')}>Reclutamiento</button>
           </div>

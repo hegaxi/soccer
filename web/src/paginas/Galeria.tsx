@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { exec, fecha, seg, urlMedio } from '../api';
 import { useApp } from '../contexto';
 import { Modal, useCarga } from '../componentes/comunes';
+import { Icono } from '../componentes/Iconos';
 
 export default function Galeria() {
   const { temporadaId, esEditor } = useApp();
@@ -36,12 +37,12 @@ export default function Galeria() {
     <div className="col">
       <div className="fila entre">
         <h1>Galería de la temporada</h1>
-        {esEditor && <Link className="btn" to="/subir">+ Subir videos o fotos</Link>}
+        {esEditor && <Link className="btn" to="/subir"><Icono n="subir" t={16} /> Subir videos o fotos</Link>}
       </div>
       <div className="fila">
-        <div className="pestanas" style={{ margin: 0, border: 0 }}>
-          <button className={tipo === 'VIDEO' ? 'activa' : ''} onClick={() => setTipo('VIDEO')}>Videos</button>
-          <button className={tipo === 'FOTO' ? 'activa' : ''} onClick={() => setTipo('FOTO')}>Fotos</button>
+        <div className="segmento">
+          <button className={tipo === 'VIDEO' ? 'activa' : ''} onClick={() => setTipo('VIDEO')}><Icono n="video" t={16} /> Videos</button>
+          <button className={tipo === 'FOTO' ? 'activa' : ''} onClick={() => setTipo('FOTO')}><Icono n="foto" t={16} /> Fotos</button>
         </div>
         <select value={partidoId ?? ''} onChange={e => setPartidoId(e.target.value ? +e.target.value : null)}>
           <option value="">Todos los partidos</option>
@@ -60,11 +61,13 @@ export default function Galeria() {
         </div>
       )}
       <div className="rejilla">
+        {!datos && !error && Array.from({ length: 8 }, (_, k) => <div key={k} className="medio esqueleto" aria-hidden="true"><div className="mini" /><div className="pie"><i /><i /></div></div>)}
         {datos?.items.map(m => {
           const cuerpo = (
             <>
               <div className="mini" style={m.tieneMiniatura ? { backgroundImage: `url(${urlMedio(m.medioId, 'mini')})` } : undefined}>
                 {!m.tieneMiniatura && (m.estado === 'ERROR' ? 'No se pudo procesar' : 'Procesando…')}
+                {m.tipo === 'VIDEO' && m.estado === 'LISTO' && <span className="play" aria-hidden="true">▶</span>}
                 {m.tipo === 'VIDEO' && m.duracionSeg != null && <span className="dur">{seg(m.duracionSeg)}</span>}
                 {m.estado !== 'LISTO' && <span className={'etq tipo ' + (m.estado === 'ERROR' ? 'rojo' : 'ambar')}>{m.estado === 'ERROR' ? 'Error' : 'Procesando'}</span>}
               </div>

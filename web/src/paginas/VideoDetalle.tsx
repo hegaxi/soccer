@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { exec, fecha, PIES, seg, urlMedio } from '../api';
 import { useApp } from '../contexto';
-import { Componentes, Estrellas, Formulario, Modal, useCarga } from '../componentes/comunes';
+import { avisar, Componentes, Estrellas, Formulario, Modal, useCarga } from '../componentes/comunes';
 
 const nuevo = (t: number) => ({ clipId: null, jugadorId: '', tipoEventoId: '', segundoEvento: Math.round(t * 10) / 10, segundoInicio: null, segundoFin: null,
   resultado: 'E', pie: '', calidad: 3, esDecisiva: false, marcaX: null, marcaY: null, nota: '', minuto: null });
@@ -56,7 +56,7 @@ export default function VideoDetalle() {
       setForm(null); setMarcando(false); recargar();
     } catch (e: any) { setError(e.message); }
   };
-  const descartar = (clipId: number, msg: string) => confirm(msg) && exec('clip.eliminar', { clipId }).then(recargar).catch(e => alert(e.message));
+  const descartar = (clipId: number, msg: string) => confirm(msg) && exec('clip.eliminar', { clipId }).then(recargar).catch(e => avisar(e.message, 'error'));
   const editar = (c: any) => { setForm({ ...nuevo(c.segundoEvento), ...c, jugadorId: c.jugadorId ?? '', tipoEventoId: c.tipoEventoId ?? '', pie: c.pie ?? '', calidad: c.calidad ?? 3, nota: c.estado === 'CANDIDATO' ? '' : c.nota ?? '' }); irA(c.segundoInicio, false); };
   const meGusta = (c: any) => exec('clip.meGusta', { clipId: c.clipId }).then(recargar).catch(() => {});
 
@@ -164,7 +164,7 @@ export default function VideoDetalle() {
           )}
           <div>
             <div className="fila entre"><h3>Jugadas ({confirmadas.length})</h3>
-              {esEditor && medio.estado === 'LISTO' && <button className="btn sec mini" onClick={() => exec('medio.candidatos', { medioId }).then(([[r]]) => { recargar(); alert(r.nuevos ? `${r.nuevos} candidato(s) nuevos` : 'No hay candidatos nuevos'); })}>Buscar candidatos</button>}</div>
+              {esEditor && medio.estado === 'LISTO' && <button className="btn sec mini" onClick={() => exec('medio.candidatos', { medioId }).then(([[r]]) => { recargar(); avisar(r.nuevos ? `${r.nuevos} candidato(s) nuevos por revisar` : 'No hay candidatos nuevos'); })}>Buscar candidatos</button>}</div>
             {confirmadas.length === 0 && <div className="tenue">{esEditor ? 'Aún no hay jugadas. Pausa el video en el momento y usa «Marcar jugada».' : 'Aún no hay jugadas marcadas en este video.'}</div>}
             <div className="lista">
               {confirmadas.map(c => (

@@ -95,3 +95,20 @@ export function useCarga<T>(fn: () => Promise<T>, deps: any[]) {
   useEffect(() => { let vivo = true; fn().then(d => vivo && (setDatos(d), setError(''))).catch(e => vivo && setError(e.message)); return () => { vivo = false; }; }, deps); // eslint-disable-line
   return { datos, error, recargar, setDatos };
 }
+
+/** Avisos breves que no interrumpen (sustituyen a alert). */
+export function avisar(mensaje: string, tipo: 'ok' | 'error' = 'ok') {
+  window.dispatchEvent(new CustomEvent('aviso', { detail: { mensaje, tipo } }));
+}
+export function Avisos() {
+  const [lista, setLista] = useState<{ id: number; mensaje: string; tipo: string }[]>([]);
+  useEffect(() => {
+    const oye = (e: Event) => {
+      const a = { id: Date.now() + Math.random(), ...(e as CustomEvent).detail };
+      setLista(l => [...l, a]);
+      setTimeout(() => setLista(l => l.filter(x => x.id !== a.id)), 4000);
+    };
+    window.addEventListener('aviso', oye); return () => window.removeEventListener('aviso', oye);
+  }, []);
+  return <div className="avisos" role="status" aria-live="polite">{lista.map(a => <div key={a.id} className={'tostada ' + a.tipo}>{a.mensaje}</div>)}</div>;
+}
