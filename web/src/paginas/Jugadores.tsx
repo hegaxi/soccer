@@ -62,6 +62,7 @@ export function JugadorFicha() {
   const [soloTemporada, setSoloTemporada] = useState(true);
   const [editar, setEditar] = useState(false); const [clip, setClip] = useState<any>(null); const [foto, setFoto] = useState<any>(null);
   const [duracion, setDuracion] = useState(240); const [error, setError] = useState(''); const [consentir, setConsentir] = useState(false);
+  const [partidoReel, setPartidoReel] = useState<number | ''>('');
   const { datos, error: errCarga, recargar } = useCarga(async () => {
     const [[j], cobertura, clips, diagnostico, fotos, reels, consentimientos] = await exec('jugador.obtener', { jugadorId, temporadaId: soloTemporada ? temporadaId : null });
     return { j, cobertura, clips, diagnostico, fotos, reels, consentimientos };
@@ -73,6 +74,10 @@ export function JugadorFicha() {
   const edad = j.fechaNacimiento ? Math.floor((Date.now() - new Date(j.fechaNacimiento).getTime()) / 31557600000) : null;
   const generar = () => exec('reel.generar', { jugadorId, temporadaId: soloTemporada ? temporadaId : null, duracionObjetivoSeg: duracion })
     .then(([[r]]) => ir(`/reels/${r.reelId}`)).catch(e => setError(e.message));
+  const generarPartido = () => exec('reel.generar', { jugadorId, modo: 'PARTIDO', partidoId: partidoReel })
+    .then(([[r]]) => ir(`/reels/${r.reelId}`)).catch(e => setError(e.message));
+  // partidos en los que tiene jugadas marcadas
+  const partidosConJugadas = [...new Map(datos.clips.filter(c => c.partidoId).map(c => [c.partidoId, c])).values()];
   const { posicion, posicionSecundaria, equipo, esMenor, puedeCompartir, contactoClub, ...editable } = j;
 
   return (
@@ -119,7 +124,7 @@ export function JugadorFicha() {
             <h3>Reel de reclutamiento</h3>
             {datos.reels.map(r => (
               <Link key={r.reelId} to={`/reels/${r.reelId}`} className="item clic">
-                <div className="crece"><b>{r.titulo}</b><div className="chico tenue">{r.clips} jugadas · {fecha(r.creadoEn)}</div></div>
+                <div className="crece"><b>{r.titulo}</b><div className="chico tenue">{r.modo === 'PARTIDO' ? 'Partido completo · ' : ''}{r.clips} jugadas · {fecha(r.creadoEn)}</div></div>
                 <span className={'etq ' + (r.estado === 'LISTO' ? 'verde' : r.estado === 'ERROR' ? 'rojo' : 'ambar')}>{r.estado === 'LISTO' ? 'Listo' : r.estado === 'EN_COLA' ? 'Renderizando' : r.estado === 'ERROR' ? 'Error' : 'Borrador'}</span>
                 {r.publicado && <span className="etq azul">Compartido</span>}
               </Link>
@@ -130,6 +135,14 @@ export function JugadorFicha() {
               </select>
               <button className="btn" onClick={generar} disabled={datos.clips.length === 0}>Generar reel automático</button>
             </div>}
+            {esEditor && partidosConJugadas.length > 0 && <div className="fila">
+              <select className="crece" value={partidoReel} onChange={e => setPartidoReel(e.target.value ? +e.target.value : '')} aria-label="Partido">
+                <option value="">Todas sus acciones en un partido…</option>
+                {partidosConJugadas.map(c => <option key={c.partidoId} value={c.partidoId}>vs {c.rival} · {fecha(c.fechaPartido)}</option>)}
+              </select>
+              <button className="btn sec" onClick={generarPartido} disabled={!partidoReel}>Generar</button>
+            </div>}
+            <span className="tenue chico">El reel de un partido muestra todo lo marcado, en orden y con las fallidas: es lo que un visor pide después de los highlights.</span>
             {error && <div className="aviso error">{error}</div>}
           </div>
           <div><h3>Diagnóstico del material</h3><Observaciones lista={datos.diagnostico} /></div>

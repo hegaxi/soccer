@@ -18,6 +18,7 @@ export default function Admin() {
     { n: 'fase', e: 'Fase', t: 'select', op: cat.fases.map(f => ({ v: f.clave, e: `${f.nombre} (×${f.factor})` })), req: true },
     { n: 'equipoLocalId', e: 'Local', t: 'select', op: equipos, req: true }, { n: 'equipoVisitaId', e: 'Visitante', t: 'select', op: equipos, req: true },
     { n: 'golesLocal', e: 'Goles local', t: 'number' }, { n: 'golesVisita', e: 'Goles visitante', t: 'number' },
+    { n: 'colorUniforme', e: 'Color de nuestro uniforme', ayuda: 'Aparece en cada jugada del reel: «de blanco #9»' },
     { n: 'nivelRival', e: 'Nivel del rival', t: 'select', req: true, ayuda: 'Pesa en el puntaje de reclutamiento de cada jugada',
       op: [1, 2, 3, 4, 5].map(n => ({ v: n, e: `${n} · ${['Muy débil', 'Débil', 'Parejo', 'Fuerte', 'Élite'][n - 1]}` })) },
   ];
@@ -42,7 +43,7 @@ export default function Admin() {
 
       {tab === 'partidos' && <>
         <div><button className="btn" disabled={!temporadaId} onClick={() => setEd({ titulo: 'Nuevo partido', accion: 'partido.guardar', campos: cPartido,
-          inicial: { temporadaId, fecha: '', competencia: '', jornada: null, fase: 'LIGA', equipoLocalId: null, equipoVisitaId: null, golesLocal: null, golesVisita: null, nivelRival: 3 } })}>+ Nuevo partido</button></div>
+          inicial: { temporadaId, fecha: '', competencia: '', jornada: null, fase: 'LIGA', equipoLocalId: null, equipoVisitaId: null, golesLocal: null, golesVisita: null, nivelRival: 3, colorUniforme: '' } })}>+ Nuevo partido</button></div>
         <table><thead><tr><th>Fecha</th><th>Partido</th><th>Competencia</th><th>Fase</th><th>Rival</th><th>Medios</th><th /></tr></thead>
           <tbody>{partidos.datos?.map(p => <tr key={p.partidoId}><td>{fecha(p.fecha)}</td><td><b>{p.local} {p.golesLocal ?? ''} - {p.golesVisita ?? ''} {p.visita}</b></td>
             <td className="tenue">{p.competencia}{p.jornada ? ` · J${p.jornada}` : ''}</td><td>{p.faseNombre}</td><td>Nivel {p.nivelRival}</td><td className="tenue">{p.videos} videos · {p.fotos} fotos</td>

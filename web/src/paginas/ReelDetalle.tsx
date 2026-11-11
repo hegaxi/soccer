@@ -12,7 +12,7 @@ export default function ReelDetalle() {
   const { esEditor } = useApp(); const ir = useNavigate();
   const [lista, setLista] = useState<any[] | null>(null);   // orden en edición (sin guardar)
   const [i, setI] = useState(0); const [error, setError] = useState('');
-  const [destinatario, setDestinatario] = useState(''); const [dias, setDias] = useState(30);
+  const [destinatario, setDestinatario] = useState(''); const [dias, setDias] = useState(30); const [conPartidos, setConPartidos] = useState(false);
   const [agregar, setAgregar] = useState(false);
 
   const { datos, error: errCarga, recargar } = useCarga(async () => {
@@ -25,7 +25,8 @@ export default function ReelDetalle() {
   if (errCarga) return <div className="centro">{errCarga}</div>;
   if (!datos) return <div className="centro">Cargando…</div>;
   const { reel } = datos; const clips = lista ?? datos.clips;
-  const total = clips.reduce((s, c) => s + (c.segundoFin - c.segundoInicio), 0);
+  // duración del video final: tarjeta + jugadas + cuadros congelados
+  const total = reel.tarjetaSeg + clips.reduce((s, c) => s + (c.segundoFin - c.segundoInicio) + (c.marcaX != null ? reel.congeladoSeg : 0), 0);
   const url = (t: string) => `${location.origin}/r/${t}`;
   const vigentes = datos.enlaces.filter(e => e.estado === 'VIGENTE').length;
   const [txt, color] = ESTADO[reel.estado];
@@ -39,7 +40,7 @@ export default function ReelDetalle() {
     <div className="col">
       <div className="fila entre">
         <div><h1>{reel.titulo}</h1>
-          <div className="tenue"><Link to={`/jugadores/${reel.jugadorId}`} style={{ textDecoration: 'underline' }}>{reel.jugador}</Link> · {reel.posicion} · {clips.length} jugadas · {seg(total)} de jugadas
+          <div className="tenue"><Link to={`/jugadores/${reel.jugadorId}`} style={{ textDecoration: 'underline' }}>{reel.jugador}</Link> · {reel.posicion} · {reel.modo === 'PARTIDO' ? 'Todas sus acciones en un partido · ' : ''}{clips.length} jugadas · {seg(total)} de video
             {' '}<span className={'etq ' + color}>{txt}</span></div></div>
         {esEditor && <div className="fila">
           {lista ? <><button className="btn sec" onClick={() => setLista(null)}>Descartar cambios</button><button className="btn" onClick={guardar}>Guardar orden</button></> : <>
@@ -63,19 +64,21 @@ export default function ReelDetalle() {
             {!reel.puedeCompartir && <div className="aviso ALTA">{reel.jugador} es menor de edad (o no tiene fecha de nacimiento) y no hay consentimiento vigente del tutor.
               No se pueden crear enlaces y los existentes no abren. <Link to={`/jugadores/${reel.jugadorId}`} style={{ textDecoration: 'underline' }}>Registrar consentimiento</Link></div>}
             {esEditor && reel.puedeCompartir && (reel.estado === 'LISTO' ? (
-              <form className="fila" onSubmit={e => { e.preventDefault(); hacer(exec('reel.enlaceCrear', { reelId, destinatario, dias }).then(() => { setDestinatario(''); avisar('Enlace creado'); })); }}>
+              <form className="fila" onSubmit={e => { e.preventDefault(); hacer(exec('reel.enlaceCrear', { reelId, destinatario, dias, incluyePartidos: conPartidos }).then(() => { setDestinatario(''); avisar('Enlace creado'); })); }}>
                 <input className="crece" required maxLength={120} placeholder="¿Para quién? (visor, club o universidad)" value={destinatario} onChange={e => setDestinatario(e.target.value)} aria-label="Destinatario" />
                 <select value={dias} onChange={e => setDias(+e.target.value)} aria-label="Vigencia">
                   <option value={7}>7 días</option><option value={15}>15 días</option><option value={30}>30 días</option><option value={60}>60 días</option><option value={90}>90 días</option>
                 </select>
                 <button className="btn">Crear enlace</button>
+                <label className="check chico" style={{ flexBasis: '100%' }}><input type="checkbox" checked={conPartidos} onChange={e => setConPartidos(e.target.checked)} />
+                  Incluir los partidos completos de donde salen las jugadas (aparecen también otros jugadores)</label>
               </form>
             ) : <span className="tenue">Renderiza el video para poder compartirlo.</span>)}
             {datos.enlaces.length === 0 ? <span className="tenue chico">Un enlace por destinatario: sabrás quién lo abrió y podrás retirarlo sin afectar a los demás.</span> : (
               <div className="lista">
                 {datos.enlaces.map(e => (
                   <div key={e.enlaceId} className="item">
-                    <div className="crece"><b>{e.destinatario}</b> <span className={'etq ' + (e.estado === 'VIGENTE' ? 'verde' : 'rojo')}>{e.estado === 'VIGENTE' ? 'Vigente' : e.estado === 'VENCIDO' ? 'Vencido' : 'Retirado'}</span>
+                    <div className="crece"><b>{e.destinatario}</b> {e.incluyePartidos && <span className="etq azul">con partidos</span>} <span className={'etq ' + (e.estado === 'VIGENTE' ? 'verde' : 'rojo')}>{e.estado === 'VIGENTE' ? 'Vigente' : e.estado === 'VENCIDO' ? 'Vencido' : 'Retirado'}</span>
                       <div className="chico tenue">{e.estado === 'VIGENTE' ? `Vence el ${fecha(e.expiraEn)}` : `Creado el ${fecha(e.creadoEn)}`} · {e.vistas === 0 ? 'sin abrir' : `abierto ${e.vistas} ${e.vistas === 1 ? 'vez' : 'veces'}, la última el ${fecha(e.ultimaVistaEn)}`}</div></div>
                     {e.estado === 'VIGENTE' && <button className="btn sec mini" onClick={() => navigator.clipboard.writeText(url(e.token)).then(() => avisar('Enlace copiado'), () => avisar(url(e.token)))}>Copiar</button>}
                     {e.estado === 'VIGENTE' && esEditor && <button className="btn peligro mini" onClick={() => confirm(`¿Retirar el enlace de ${e.destinatario}?`) && hacer(exec('reel.enlaceRevocar', { enlaceId: e.enlaceId }))}>Retirar</button>}
@@ -99,7 +102,7 @@ export default function ReelDetalle() {
               <div key={c.clipId} className={'item' + (k === i && (reel.estado !== 'LISTO' || lista) ? ' sel' : '')}>
                 <div className="puesto">{k + 1}</div>
                 <div className="crece" style={{ cursor: 'pointer' }} onClick={() => setI(k)}>
-                  <b>{c.tipoEvento}</b> <Estrellas n={c.calidad} /> {c.marcaX == null && <span className="etq ambar" title="Sin recuadro de identificación">sin señalar</span>}
+                  <b>{c.tipoEvento}</b> {c.resultado === 'F' && <span className="etq rojo">fallida</span>} <Estrellas n={c.calidad} /> {c.marcaX == null && <span className="etq ambar" title="Sin recuadro de identificación">sin señalar</span>}
                   <div className="chico tenue">{c.motivo} · {seg(c.segundoFin - c.segundoInicio)}</div></div>
                 <div className="puntaje">{c.puntaje}</div>
                 {esEditor && reel.estado !== 'EN_COLA' && <div className="fila" style={{ gap: 3, flexWrap: 'nowrap' }}>

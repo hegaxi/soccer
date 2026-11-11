@@ -100,6 +100,9 @@ MERGE cat.Parametro t USING (VALUES
  ('REEL_PENAL_MISMO_TIPO',   0.80,  N'Penalización por cada jugada ya elegida del mismo tipo'),
  ('REEL_PENAL_MISMO_PARTIDO',0.93,  N'Penalización por cada jugada ya elegida del mismo partido'),
  ('REEL_APERTURA',           5,     N'Jugadas de apertura: las mejores van primero'),
+ ('REEL_TARJETA_SEG',        4,     N'Duración de la tarjeta inicial del reel'),
+ ('REEL_CONGELADO_SEG',      1.0,   N'Segundos que se congela el cuadro para señalar al jugador'),
+ ('MARCA_TAMANO_DEF',        12,    N'Alto por defecto del recuadro que señala al jugador (% del alto del cuadro)'),
  ('CAND_PRE_SEG',            8,     N'Candidatos automáticos: segundos antes del pico'),
  ('CAND_POST_SEG',           4,     N'Candidatos automáticos: segundos después del pico'),
  ('CAND_MIN_USUARIOS_REP',   3,     N'Usuarios distintos que deben repetir un tramo para proponerlo')

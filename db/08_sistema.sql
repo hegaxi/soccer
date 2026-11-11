@@ -28,7 +28,8 @@ END
 GO
 
 /* Variante: 'orig' archivo original · 'web' versión reproducible · 'mini' miniatura.
-   Sin sesión solo se entrega la foto de perfil del jugador de un reel con enlace vigente. */
+   Sin sesión solo se entrega, con un enlace vigente, la foto de perfil del jugador del reel y,
+   si el enlace los incluye, los partidos completos de donde salen sus jugadas. */
 CREATE OR ALTER PROCEDURE sis.usp_Archivo_AutorizarLectura
   @MedioId int, @Variante varchar(5) = 'web', @TokenPublico varchar(40) = NULL, @_UsuarioId int = NULL
 AS
@@ -37,8 +38,12 @@ BEGIN
   IF @Variante NOT IN ('orig','web','mini') THROW 50400, N'Variante inválida', 1;
   IF @_UsuarioId IS NULL
   BEGIN
+    DECLARE @reelEnlace int = hl.fn_EnlaceReel(@TokenPublico);
     IF NOT EXISTS (SELECT 1 FROM hl.Reel r JOIN fut.Jugador j ON j.JugadorId = r.JugadorId
-                   WHERE r.ReelId = hl.fn_EnlaceReel(@TokenPublico) AND j.FotoMedioId = @MedioId)
+                   WHERE r.ReelId = @reelEnlace AND j.FotoMedioId = @MedioId)
+       -- o un partido completo de donde sale una jugada del reel, si el enlace los incluye
+       AND NOT EXISTS (SELECT 1 FROM hl.ReelEnlace e JOIN hl.ReelClip rc ON rc.ReelId = e.ReelId JOIN hl.Clip c ON c.ClipId = rc.ClipId
+                       WHERE e.Token = @TokenPublico AND e.ReelId = @reelEnlace AND e.IncluyePartidos = 1 AND c.MedioId = @MedioId)
       THROW 50401, N'Inicia sesión para continuar', 1;
     IF @Variante = 'orig' SET @Variante = 'web';
   END
@@ -138,14 +143,18 @@ BEGIN
   END
 
   SELECT t.TrabajoId, t.Tipo, t.MedioId, t.ReelId, TipoMedio = m.Tipo, m.RutaArchivo,
+         TarjetaSeg = cat.fn_Param('REEL_TARJETA_SEG'), CongeladoSeg = cat.fn_Param('REEL_CONGELADO_SEG'),
          RutaSalida = IIF(t.ReelId IS NULL, NULL, CONCAT('reels/', t.ReelId, '_', LOWER(CONVERT(varchar(36), NEWID())), '.mp4'))
   FROM @t t LEFT JOIN med.Medio m ON m.MedioId = t.MedioId;
 
   IF @reel IS NULL RETURN;
 
   -- jugadas a montar, en orden
-  SELECT rc.Orden, Ruta = ISNULL(m.RutaWeb, m.RutaArchivo), v.SegundoInicio, v.SegundoFin, v.MarcaX, v.MarcaY,
-         Etiqueta = CONCAT_WS(N'  |  ', UPPER(v.TipoEvento), N'vs ' + v.Rival, CAST(v.Minuto AS nvarchar(3)) + N'''')
+  -- la etiqueta dice a quién mirar: color del uniforme y dorsal, además de rival y fecha
+  SELECT rc.Orden, Ruta = ISNULL(m.RutaWeb, m.RutaArchivo), v.SegundoInicio, v.SegundoFin, v.MarcaX, v.MarcaY, v.MarcaTamano, v.MarcaSegundo,
+         Etiqueta = CONCAT_WS(N'  |  ', UPPER(v.TipoEvento) + IIF(v.Resultado = 'F', N' (fallida)', N''),
+                              N'vs ' + v.Rival, CONVERT(nvarchar(10), v.FechaPartido, 103), N'min ' + CAST(v.Minuto AS nvarchar(3)),
+                              NULLIF(CONCAT_WS(N' ', N'de ' + LOWER(v.ColorUniforme), N'#' + CAST(v.Dorsal AS nvarchar(3))), N''))
   FROM hl.ReelClip rc JOIN hl.vw_ClipPuntaje v ON v.ClipId = rc.ClipId JOIN med.Medio m ON m.MedioId = v.MedioId
   WHERE rc.ReelId = @reel ORDER BY rc.Orden;
 

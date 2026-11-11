@@ -23,6 +23,8 @@ FROM (VALUES
 ) v(Fecha, Jornada, Comp, Fase, Local, Rival, GL, GV, Nivel)
 JOIN fut.Equipo e ON e.Nombre = v.Rival;
 
+UPDATE fut.Partido SET ColorUniforme = IIF(EquipoLocalId = @h, N'Blanco', N'Azul marino');
+
 INSERT fut.Jugador(Nombre, Apellidos, FechaNacimiento, PosicionId, PosicionSecundariaId, PieDominante, EstaturaCm, PesoKg, Dorsal,
                    EquipoId, AnioGraduacion, PromedioAcademico, CorreoContacto, TelefonoContacto, Bio)
 SELECT v.Nombre, v.Apellidos, v.Nac, p.PosicionId, p2.PosicionId, v.Pie, v.Est, v.Peso, v.Dorsal, @h, v.Grad, v.Prom, v.Correo, v.Tel, v.Bio

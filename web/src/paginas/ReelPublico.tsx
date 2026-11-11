@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { exec, fecha, PIES, seg, urlMedio, urlReel } from '../api';
 import { useCarga } from '../componentes/comunes';
@@ -7,7 +7,7 @@ import { useCarga } from '../componentes/comunes';
  *  De un menor solo se muestra el año de nacimiento y el contacto del club. */
 export default function ReelPublico() {
   const token = useParams().token!;
-  const { datos, error } = useCarga(async () => { const [[reel], clips] = await exec('reel.publico', { token }); return { reel, clips }; }, [token]);
+  const { datos, error } = useCarga(async () => { const [[reel], clips, partidos] = await exec('reel.publico', { token }); return { reel, clips, partidos: partidos ?? [] }; }, [token]);
   useEffect(() => {   // que los buscadores no indexen la página
     const m = document.createElement('meta'); m.name = 'robots'; m.content = 'noindex, nofollow';
     document.head.appendChild(m); return () => { m.remove(); };
@@ -15,7 +15,7 @@ export default function ReelPublico() {
   if (error) return <div className="centro">{error}</div>;
   if (!datos) return <div className="centro"><div className="girando" aria-label="Cargando" /></div>;
   const r = datos.reel;
-  let acumulado = 4; // la tarjeta inicial dura 4 s
+  let acumulado = r.tarjetaSeg;
   return (
     <div className="publico col">
       <div className="tarjeta fila" style={{ alignItems: 'flex-start' }}>
@@ -48,15 +48,35 @@ export default function ReelPublico() {
         )}
       </div>
       <div>
-        <h3>Contenido · {seg(r.duracionSeg)}</h3>
+        <h3>{r.modo === 'PARTIDO' ? 'Todas sus acciones en el partido' : 'Contenido'} · {seg(r.duracionSeg)}</h3>
         <table><tbody>{datos.clips.map(c => {
-          const inicio = acumulado; acumulado += (c.segundoFin - c.segundoInicio) + (c.marcaX != null ? 1.5 : 0);
+          const inicio = acumulado; acumulado += (c.segundoFin - c.segundoInicio) + (c.marcaX != null ? r.congeladoSeg : 0);
           return <tr key={c.orden}><td className="tenue">{seg(inicio)}</td><td><b>{c.tipoEvento}</b></td>
-            <td className="tenue">{c.rival ? `vs ${c.rival}` : ''}{c.minuto ? ` · min ${c.minuto}` : ''}</td>
-            <td>{c.esDecisiva && <span className="etq verde">decisiva</span>} {c.esPieDebil && <span className="etq azul">pie no dominante</span>}</td></tr>;
+            <td className="tenue">{c.rival ? `vs ${c.rival}` : ''}{c.fechaPartido ? ` · ${fecha(c.fechaPartido)}` : ''}{c.minuto ? ` · min ${c.minuto}` : ''}{c.colorUniforme ? ` · de ${c.colorUniforme.toLowerCase()}` : ''}</td>
+            <td>{c.resultado === 'F' && <span className="etq rojo">fallida</span>} {c.esDecisiva && <span className="etq verde">decisiva</span>} {c.esPieDebil && <span className="etq azul">pie no dominante</span>}</td></tr>;
         })}</tbody></table>
       </div>
+      {datos.partidos.length > 0 && <Partidos partidos={datos.partidos} clips={datos.clips} dorsal={r.dorsal} token={token} />}
       {r.expiraEn && <p className="tenue chico">Enlace personal, disponible hasta el {fecha(r.expiraEn)}. Material de un jugador en formación: no lo redistribuyas.</p>}
+    </div>
+  );
+}
+
+/** Partidos completos con las jugadas del reel como índice: el visor salta a cada una y ve lo que pasa alrededor. */
+function Partidos({ partidos, clips, dorsal, token }: { partidos: any[]; clips: any[]; dorsal: number | null; token: string }) {
+  const [sel, setSel] = useState(partidos[0].medioId);
+  const video = useRef<HTMLVideoElement>(null);
+  const p = partidos.find(x => x.medioId === sel)!;
+  const indice = clips.filter(c => c.medioId === sel).sort((a, b) => a.segundoInicio - b.segundoInicio);
+  const ir = (s: number) => { const v = video.current; if (v) { v.currentTime = s; v.play().catch(() => {}); } };
+  return (
+    <div className="col">
+      <h3>Partidos completos</h3>
+      {partidos.length > 1 && <div className="fila">{partidos.map(x => <button key={x.medioId} className={'btn mini ' + (x.medioId === sel ? '' : 'sec')} onClick={() => setSel(x.medioId)}>{x.partido ?? x.titulo}</button>)}</div>}
+      <div className="tenue">{p.partido ?? p.titulo}{p.fechaPartido && ` · ${fecha(p.fechaPartido)}`}{p.competencia && ` · ${p.competencia}`}
+        {(p.colorUniforme || dorsal) && <b style={{ color: 'var(--texto)' }}> · Juega{p.colorUniforme ? ` de ${p.colorUniforme.toLowerCase()}` : ''}{dorsal ? ` con el #${dorsal}` : ''}</b>}</div>
+      <div className="reproductor"><video key={sel} ref={video} src={urlMedio(sel, 'web', token)} controls playsInline preload="metadata" controlsList="nodownload" onContextMenu={e => e.preventDefault()} /></div>
+      <div className="fila">{indice.map(c => <button key={c.clipId} className="btn sec mini" onClick={() => ir(c.segundoInicio)}>{seg(c.segundoInicio)} · {c.tipoEvento}</button>)}</div>
     </div>
   );
 }

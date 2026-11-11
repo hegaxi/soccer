@@ -61,8 +61,12 @@ varios usuarios regresaron a ver. El editor los confirma (jugador + tipo) o los 
 - Selección por puntaje con rendimientos decrecientes por tipo de jugada y por partido: perfil completo y
   consistente en vez de diez goles iguales contra el mismo rival.
 - Las mejores primero (el visor decide en los primeros 30 s) y una fuerte reservada para el cierre.
-- El video final lleva tarjeta inicial con los datos del jugador y, en cada jugada, un cuadro congelado con un
-  recuadro que lo señala. Sale sin audio.
+- El video final lleva tarjeta inicial con los datos del jugador y, en cada jugada, un cuadro congelado (1 s)
+  con un recuadro que lo señala. La marca se pone en el momento en que el jugador entra a la jugada y con el
+  tamaño que pida la toma. Cada jugada lleva una etiqueta con rival, fecha, color del uniforme y dorsal.
+  Sale sin audio. La duración objetivo incluye la tarjeta y los cuadros congelados.
+- **Reel de un partido** (`@Modo = 'PARTIDO'`): todas las acciones marcadas del jugador en un partido, en orden
+  y con las fallidas. Es el contexto que un visor pide después de los highlights.
 - El video no lleva contacto ni fecha de nacimiento completa (solo «Categoría» = año de nacimiento y
   «Class of» = año de graduación): un archivo descargado ya no se puede retirar.
 
@@ -78,6 +82,9 @@ equipo sin contacto para visores.
   corta el acceso de inmediato, porque el permiso se comprueba en cada visita.
 - **Un enlace por destinatario** (`hl.ReelEnlace`): con caducidad (30 días por defecto, parámetro
   `ENLACE_DIAS`), retirable de forma individual y con conteo de aperturas.
+- **Partidos completos, opcional por enlace**: al crear el enlace se puede incluir el video completo de los
+  partidos de donde salen las jugadas, con las jugadas como índice. En esos videos aparecen también otros
+  jugadores, por eso no se incluyen por defecto.
 - **Lo que ve el visor**: el video, año de nacimiento y el **contacto del club** (se captura en
   Administración → Equipos). El contacto personal o del tutor solo aparece si el jugador es mayor de edad o el
   tutor lo autorizó expresamente.
@@ -155,7 +162,8 @@ web/   src/paginas (Galeria, Subir, VideoDetalle, Highlights, Jugadores, ReelDet
 
 ## Limitaciones conocidas
 
-- Eliminar un medio lo oculta, pero no borra sus archivos del almacén.
+- Eliminar un medio lo oculta, pero no borra sus archivos del almacén; tampoco se borra el video anterior de un
+  reel al renderizarlo de nuevo.
 - El hash de contraseñas es SHA2-512 con sal e iteraciones, hecho en T-SQL para mantener la autenticación en la
   base; es más débil que bcrypt/Argon2.
 - La detección automática propone momentos, no identifica la jugada ni al jugador: eso lo confirma una persona.

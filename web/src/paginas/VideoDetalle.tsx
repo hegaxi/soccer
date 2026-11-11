@@ -5,7 +5,7 @@ import { useApp } from '../contexto';
 import { avisar, Componentes, Estrellas, Formulario, Modal, useCarga } from '../componentes/comunes';
 
 const nuevo = (t: number) => ({ clipId: null, jugadorId: '', tipoEventoId: '', segundoEvento: Math.round(t * 10) / 10, segundoInicio: null, segundoFin: null,
-  resultado: 'E', pie: '', calidad: 3, esDecisiva: false, marcaX: null, marcaY: null, nota: '', minuto: null });
+  resultado: 'E', pie: '', calidad: 3, esDecisiva: false, marcaX: null, marcaY: null, marcaTamano: 12, marcaSegundo: null, nota: '', minuto: null });
 
 export default function VideoDetalle() {
   const medioId = +useParams().id!;
@@ -49,15 +49,19 @@ export default function VideoDetalle() {
   const guardar = async () => {
     setError('');
     try {
-      const p: any = { ...form, medioId, pie: form.pie || null, nota: form.nota || null };
-      if (p.clipId == null) delete p.clipId; else delete p.medioId;
+      // solo los campos que la acción acepta: al editar, el formulario trae además columnas de solo lectura
+      const campos = ['jugadorId', 'tipoEventoId', 'segundoEvento', 'segundoInicio', 'segundoFin', 'minuto', 'resultado', 'calidad',
+        'esDecisiva', 'marcaX', 'marcaY', 'marcaTamano', 'marcaSegundo'];
+      const p: any = Object.fromEntries(campos.map(k => [k, form[k] === '' ? null : form[k]]));
+      p.pie = form.pie || null; p.nota = form.nota || null;
+      if (form.clipId == null) p.medioId = medioId; else p.clipId = form.clipId;
       if (!p.jugadorId || !p.tipoEventoId) throw new Error('Elige el jugador y el tipo de jugada');
       await exec('clip.guardar', p);
       setForm(null); setMarcando(false); recargar();
     } catch (e: any) { setError(e.message); }
   };
   const descartar = (clipId: number, msg: string) => confirm(msg) && exec('clip.eliminar', { clipId }).then(recargar).catch(e => avisar(e.message, 'error'));
-  const editar = (c: any) => { setForm({ ...nuevo(c.segundoEvento), ...c, jugadorId: c.jugadorId ?? '', tipoEventoId: c.tipoEventoId ?? '', pie: c.pie ?? '', calidad: c.calidad ?? 3, nota: c.estado === 'CANDIDATO' ? '' : c.nota ?? '' }); irA(c.segundoInicio, false); };
+  const editar = (c: any) => { setForm({ ...nuevo(c.segundoEvento), ...c, marcaTamano: c.marcaTamano ?? 12, jugadorId: c.jugadorId ?? '', tipoEventoId: c.tipoEventoId ?? '', pie: c.pie ?? '', calidad: c.calidad ?? 3, nota: c.estado === 'CANDIDATO' ? '' : c.nota ?? '' }); irA(c.segundoInicio, false); };
   const meGusta = (c: any) => exec('clip.meGusta', { clipId: c.clipId }).then(recargar).catch(() => {});
 
   const confirmadas = datos!.clips.filter(c => c.estado === 'CONFIRMADO');
@@ -86,9 +90,10 @@ export default function VideoDetalle() {
               onTimeUpdate={e => { setT(e.currentTarget.currentTime); if (!e.currentTarget.seeking) ultimo.current = e.currentTarget.currentTime; }} onSeeked={alBuscar} />}
             {marcando && <div className="capa" title="Haz clic sobre el jugador" onClick={e => {
               const r = e.currentTarget.getBoundingClientRect();
-              pon({ marcaX: +(((e.clientX - r.left) / r.width) * 100).toFixed(1), marcaY: +(((e.clientY - r.top) / r.height) * 100).toFixed(1) }); setMarcando(false);
+              pon({ marcaX: +(((e.clientX - r.left) / r.width) * 100).toFixed(1), marcaY: +(((e.clientY - r.top) / r.height) * 100).toFixed(1),
+                    marcaSegundo: Math.round((video.current?.currentTime ?? t) * 10) / 10 }); setMarcando(false);
             }} />}
-            {form?.marcaX != null && <div className="marca-jugador" style={{ left: `${form.marcaX}%`, top: `${form.marcaY}%` }} />}
+            {form?.marcaX != null && <div className="marca-jugador" style={{ left: `${form.marcaX}%`, top: `${form.marcaY}%`, height: `${form.marcaTamano ?? 12}%` }} />}
           </div>
           <div className="linea-tiempo" onClick={e => { const r = e.currentTarget.getBoundingClientRect(); irA(((e.clientX - r.left) / r.width) * dur, false); }}>
             {datos!.clips.map(c => (
@@ -131,10 +136,17 @@ export default function VideoDetalle() {
                 <label className="ancho">Nota<input value={form.nota ?? ''} maxLength={300} onChange={e => pon({ nota: e.target.value })} /></label>
               </div>
               <div className="fila">
-                <button type="button" className={'btn ' + (marcando ? '' : 'sec')} onClick={() => { irA(form.segundoInicio ?? Math.max(0, form.segundoEvento - (tipoSel?.preRollSeg ?? 6)), false); video.current?.pause(); setMarcando(true); }}>
-                  {marcando ? 'Haz clic sobre el jugador en el video…' : form.marcaX != null ? '✓ Jugador señalado (cambiar)' : 'Señalar al jugador al inicio del clip'}</button>
-                {form.marcaX != null && <button type="button" className="btn sec mini" onClick={() => pon({ marcaX: null, marcaY: null })}>Quitar marca</button>}
-                <span className="tenue chico crece">El visor debe saber a quién mirar antes de que empiece la jugada.</span>
+                <button type="button" className={'btn ' + (marcando ? '' : 'sec')} onClick={() => {
+                  // se señala en el cuadro que está en pantalla si cae dentro del clip; si no, se va al inicio del clip
+                  const ini = form.segundoInicio ?? Math.max(0, form.segundoEvento - (tipoSel?.preRollSeg ?? 6)), fin = form.segundoFin ?? form.segundoEvento + (tipoSel?.postRollSeg ?? 5);
+                  if (t < ini || t > fin - 1) irA(ini, false);
+                  video.current?.pause(); setMarcando(true);
+                }}>{marcando ? 'Haz clic sobre el jugador en el video…' : form.marcaX != null ? `✓ Señalado en ${seg(form.marcaSegundo)} (cambiar)` : 'Señalar al jugador'}</button>
+                {form.marcaX != null && <>
+                  <label style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>Tamaño
+                    <input type="range" min={4} max={40} step={1} value={form.marcaTamano ?? 12} onChange={e => pon({ marcaTamano: +e.target.value })} aria-label="Tamaño de la marca" /></label>
+                  <button type="button" className="btn sec mini" onClick={() => pon({ marcaX: null, marcaY: null, marcaSegundo: null })}>Quitar marca</button></>}
+                <span className="tenue chico crece">Pausa donde el jugador ya se ve y entra a la jugada; ajusta el recuadro para que lo encierre solo a él.</span>
               </div>
               {error && <div className="aviso error">{error}</div>}
               <div className="fila" style={{ justifyContent: 'flex-end' }}>

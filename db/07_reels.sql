@@ -63,7 +63,8 @@ AS BEGIN
 END
 GO
 
-CREATE OR ALTER PROCEDURE api.usp_Reel_EnlaceCrear @ReelId int, @Destinatario nvarchar(120), @Dias int = NULL, @_UsuarioId int
+CREATE OR ALTER PROCEDURE api.usp_Reel_EnlaceCrear
+  @ReelId int, @Destinatario nvarchar(120), @Dias int = NULL, @IncluyePartidos bit = 0, @_UsuarioId int
 AS
 BEGIN
   SET NOCOUNT ON;
@@ -78,8 +79,8 @@ BEGIN
   SET @Dias = ISNULL(@Dias, CAST(cat.fn_Param('ENLACE_DIAS') AS int));
   IF @Dias NOT BETWEEN 1 AND 180 THROW 50400, N'La vigencia del enlace va de 1 a 180 días', 1;
   DECLARE @token varchar(40) = LOWER(CONVERT(varchar(40), CRYPT_GEN_RANDOM(16), 2));
-  INSERT hl.ReelEnlace(ReelId, Token, Destinatario, ExpiraEn, CreadoPor)
-  VALUES (@ReelId, @token, @Destinatario, DATEADD(day, @Dias, SYSUTCDATETIME()), @_UsuarioId);
+  INSERT hl.ReelEnlace(ReelId, Token, Destinatario, ExpiraEn, IncluyePartidos, CreadoPor)
+  VALUES (@ReelId, @token, @Destinatario, DATEADD(day, @Dias, SYSUTCDATETIME()), @IncluyePartidos, @_UsuarioId);
   SELECT EnlaceId = CAST(SCOPE_IDENTITY() AS int), Token = @token;
 END
 GO
@@ -167,13 +168,18 @@ BEGIN
 END
 GO
 
-/* Arma el reel de reclutamiento de un jugador.
-   Criterio: (1) solo jugadas donde luce — las fallidas entran solo con ejecución de 4-5★;
-   (2) selección voraz por PuntajeReclutamiento con rendimientos decrecientes por tipo de jugada y por partido,
-       para mostrar un perfil completo y consistente en vez de diez goles iguales;
-   (3) lo mejor al principio (el visor decide en los primeros 30 s) y una jugada fuerte reservada para el cierre. */
+/* Arma un reel de un jugador. Dos modos:
+   MEJORES — highlights de reclutamiento:
+     (1) solo jugadas donde luce — las fallidas entran solo con ejecución de 4-5★;
+     (2) selección voraz por PuntajeReclutamiento con rendimientos decrecientes por tipo de jugada y por partido,
+         para mostrar un perfil completo y consistente en vez de diez goles iguales;
+     (3) lo mejor al principio (el visor decide en los primeros 30 s) y una jugada fuerte reservada para el cierre.
+     La duración objetivo incluye la tarjeta inicial y los cuadros congelados.
+   PARTIDO — todas sus acciones marcadas en un partido, en orden cronológico e incluidas las fallidas:
+     es el contexto honesto que un visor pide después de ver los highlights. */
 CREATE OR ALTER PROCEDURE api.usp_Reel_Generar
-  @JugadorId int, @TemporadaId int = NULL, @DuracionObjetivoSeg int = 240, @Titulo nvarchar(200) = NULL, @_UsuarioId int
+  @JugadorId int, @TemporadaId int = NULL, @DuracionObjetivoSeg int = 240, @Titulo nvarchar(200) = NULL,
+  @Modo varchar(10) = 'MEJORES', @PartidoId int = NULL, @_UsuarioId int
 AS
 BEGIN
   SET NOCOUNT ON; SET XACT_ABORT ON;
@@ -181,75 +187,104 @@ BEGIN
   SELECT @nombre = CONCAT(j.Nombre, ' ', j.Apellidos), @posicion = p.Nombre
   FROM fut.Jugador j JOIN cat.Posicion p ON p.PosicionId = j.PosicionId WHERE j.JugadorId = @JugadorId;
   IF @nombre IS NULL THROW 50404, N'Jugador no encontrado', 1;
+  IF @Modo NOT IN ('MEJORES','PARTIDO') THROW 50400, N'Modo de reel inválido', 1;
+  IF @Modo = 'MEJORES' SET @PartidoId = NULL;
+  IF @Modo = 'PARTIDO' AND NOT EXISTS (SELECT 1 FROM fut.Partido WHERE PartidoId = @PartidoId) THROW 50400, N'Elige el partido', 1;
   IF @DuracionObjetivoSeg NOT BETWEEN 30 AND 600 THROW 50400, N'La duración objetivo va de 30 segundos a 10 minutos', 1;
 
   DECLARE @maxClips int = cat.fn_Param('REEL_MAX_CLIPS'), @penTipo float = cat.fn_Param('REEL_PENAL_MISMO_TIPO'),
-          @penPartido float = cat.fn_Param('REEL_PENAL_MISMO_PARTIDO'), @apertura int = cat.fn_Param('REEL_APERTURA');
+          @penPartido float = cat.fn_Param('REEL_PENAL_MISMO_PARTIDO'), @apertura int = cat.fn_Param('REEL_APERTURA'),
+          @tarjeta float = cat.fn_Param('REEL_TARJETA_SEG'), @congelado float = cat.fn_Param('REEL_CONGELADO_SEG');
 
-  SELECT v.ClipId, v.TipoEventoId, v.PartidoId, Dur = CAST(v.DuracionSeg AS float), Puntaje = CAST(v.PuntajeReclutamiento AS float),
+  SELECT v.ClipId, v.MedioId, v.TipoEventoId, v.PartidoId, v.SegundoEvento, v.Resultado,
+         Dur = CAST(v.DuracionSeg AS float) + IIF(v.MarcaX IS NULL, 0, @congelado),   -- lo que ocupa en el video final
+         Puntaje = CAST(v.PuntajeReclutamiento AS float),
          v.TipoEvento, v.Rival, v.NivelRival, v.EsDecisiva, v.EsPieDebil, v.Calidad, v.Minuto, v.FechaPartido,
          Pick = CAST(NULL AS int)
   INTO #c
   FROM hl.vw_ClipPuntaje v
   JOIN med.Medio m ON m.MedioId = v.MedioId AND m.Estado = 'LISTO'
-  WHERE v.JugadorId = @JugadorId AND (@TemporadaId IS NULL OR v.TemporadaId = @TemporadaId)
-    AND (v.Resultado = 'E' OR v.Calidad >= 4);
+  WHERE v.JugadorId = @JugadorId
+    AND ((@Modo = 'MEJORES' AND (@TemporadaId IS NULL OR v.TemporadaId = @TemporadaId) AND (v.Resultado = 'E' OR v.Calidad >= 4))
+      OR (@Modo = 'PARTIDO' AND v.PartidoId = @PartidoId));
 
-  IF NOT EXISTS (SELECT 1 FROM #c) THROW 50409, N'El jugador no tiene jugadas confirmadas en videos listos para armar un reel', 1;
-
-  -- el nivel actual importa: lo de hace más de 4 meses (respecto a su última jugada) pesa un poco menos
-  DECLARE @ultima date = (SELECT MAX(FechaPartido) FROM #c);
-  UPDATE #c SET Puntaje = Puntaje * 0.93 WHERE FechaPartido IS NOT NULL AND DATEDIFF(day, FechaPartido, @ultima) > 120;
-
-  DECLARE @n int = 0, @restante float = @DuracionObjetivoSeg, @id int, @dur float;
-  WHILE @n < @maxClips AND @restante > 0
+  IF NOT EXISTS (SELECT 1 FROM #c)
   BEGIN
-    SET @id = NULL;
-    SELECT TOP 1 @id = c.ClipId, @dur = c.Dur
-    FROM #c c
-    WHERE c.Pick IS NULL AND c.Dur <= @restante + 6
-    ORDER BY c.Puntaje
-             * POWER(@penTipo,    (SELECT COUNT(*) FROM #c x WHERE x.Pick IS NOT NULL AND x.TipoEventoId = c.TipoEventoId))
-             * POWER(@penPartido, (SELECT COUNT(*) FROM #c x WHERE x.Pick IS NOT NULL AND x.PartidoId = c.PartidoId)) DESC,
-             c.ClipId;
-    IF @id IS NULL BREAK;
-    SET @n += 1; SET @restante -= @dur;
-    UPDATE #c SET Pick = @n WHERE ClipId = @id;
+    DECLARE @sin nvarchar(200) = IIF(@Modo = 'PARTIDO', N'El jugador no tiene jugadas marcadas en ese partido',
+                                     N'El jugador no tiene jugadas confirmadas en videos listos para armar un reel');
+    THROW 50409, @sin, 1;
   END
 
-  -- cierre fuerte: la primera jugada elegida después de la apertura se reserva para el final
-  IF @n >= @apertura + 3 UPDATE #c SET Pick = @n + 1 WHERE Pick = @apertura + 1;
+  DECLARE @n int = 0, @rival nvarchar(100), @fechaP date;
+  IF @Modo = 'PARTIDO'
+  BEGIN
+    -- orden del partido: por video (primer tiempo, segundo tiempo) y momento; tope de 60 para que el render sea manejable
+    ;WITH o AS (SELECT Pick, n = ROW_NUMBER() OVER (ORDER BY MedioId, SegundoEvento) FROM #c)
+    UPDATE o SET Pick = IIF(n <= 60, n, NULL);
+    SELECT @n = COUNT(*), @rival = MAX(Rival), @fechaP = MAX(FechaPartido) FROM #c WHERE Pick IS NOT NULL;
+    SET @TemporadaId = (SELECT TemporadaId FROM fut.Partido WHERE PartidoId = @PartidoId);
+  END
+  ELSE
+  BEGIN
+    -- el nivel actual importa: lo de hace más de 4 meses (respecto a su última jugada) pesa un poco menos
+    DECLARE @ultima date = (SELECT MAX(FechaPartido) FROM #c);
+    UPDATE #c SET Puntaje = Puntaje * 0.93 WHERE FechaPartido IS NOT NULL AND DATEDIFF(day, FechaPartido, @ultima) > 120;
+
+    DECLARE @restante float = @DuracionObjetivoSeg - @tarjeta, @id int, @dur float;
+    WHILE @n < @maxClips AND @restante > 0
+    BEGIN
+      SET @id = NULL;
+      SELECT TOP 1 @id = c.ClipId, @dur = c.Dur
+      FROM #c c
+      WHERE c.Pick IS NULL AND c.Dur <= @restante + 6
+      ORDER BY c.Puntaje
+               * POWER(@penTipo,    (SELECT COUNT(*) FROM #c x WHERE x.Pick IS NOT NULL AND x.TipoEventoId = c.TipoEventoId))
+               * POWER(@penPartido, (SELECT COUNT(*) FROM #c x WHERE x.Pick IS NOT NULL AND x.PartidoId = c.PartidoId)) DESC,
+               c.ClipId;
+      IF @id IS NULL BREAK;
+      SET @n += 1; SET @restante -= @dur;
+      UPDATE #c SET Pick = @n WHERE ClipId = @id;
+    END
+
+    -- cierre fuerte: la primera jugada elegida después de la apertura se reserva para el final
+    IF @n >= @apertura + 3 UPDATE #c SET Pick = @n + 1 WHERE Pick = @apertura + 1;
+  END
 
   DECLARE @temp nvarchar(60) = (SELECT Nombre FROM fut.Temporada WHERE TemporadaId = @TemporadaId);
-  SET @Titulo = ISNULL(NULLIF(LTRIM(RTRIM(@Titulo)), ''), CONCAT_WS(N' · ', @nombre, @posicion, ISNULL(@temp, N'Trayectoria')));
+  SET @Titulo = ISNULL(NULLIF(LTRIM(RTRIM(@Titulo)), ''),
+       IIF(@Modo = 'PARTIDO', CONCAT_WS(N' · ', @nombre, N'Todas sus acciones vs ' + @rival, CONVERT(nvarchar(10), @fechaP, 103)),
+                              CONCAT_WS(N' · ', @nombre, @posicion, ISNULL(@temp, N'Trayectoria'))));
 
   BEGIN TRAN;
-    INSERT hl.Reel(JugadorId, TemporadaId, Titulo, DuracionObjetivoSeg, CreadoPor)
-    VALUES (@JugadorId, @TemporadaId, @Titulo, @DuracionObjetivoSeg, @_UsuarioId);
+    INSERT hl.Reel(JugadorId, TemporadaId, Titulo, DuracionObjetivoSeg, Modo, PartidoId, CreadoPor)
+    VALUES (@JugadorId, @TemporadaId, @Titulo, @DuracionObjetivoSeg, @Modo, @PartidoId, @_UsuarioId);
     DECLARE @reel int = SCOPE_IDENTITY();
     INSERT hl.ReelClip(ReelId, Orden, ClipId, Motivo)
     SELECT @reel, ROW_NUMBER() OVER (ORDER BY c.Pick), c.ClipId,
-           CONCAT_WS(N' · ',
-             CASE WHEN c.Pick <= @apertura THEN N'Apertura' WHEN c.Pick = @n + 1 THEN N'Cierre' END,
-             N'vs ' + c.Rival + IIF(c.NivelRival >= 4, N' (rival de nivel alto)', N''),
-             IIF(c.EsDecisiva = 1, N'jugada decisiva', NULL),
-             IIF(c.EsPieDebil = 1, N'pie no dominante', NULL),
-             IIF(c.Calidad = 5, N'ejecución 5/5', NULL),
-             IIF(c.Minuto >= 75, N'tramo final', NULL))
+           IIF(@Modo = 'PARTIDO',
+             CONCAT_WS(N' · ', N'min ' + CAST(c.Minuto AS nvarchar(3)), IIF(c.Resultado = 'F', N'fallida', NULL), IIF(c.EsDecisiva = 1, N'jugada decisiva', NULL)),
+             CONCAT_WS(N' · ',
+               CASE WHEN c.Pick <= @apertura THEN N'Apertura' WHEN c.Pick = @n + 1 THEN N'Cierre' END,
+               N'vs ' + c.Rival + IIF(c.NivelRival >= 4, N' (rival de nivel alto)', N''),
+               IIF(c.EsDecisiva = 1, N'jugada decisiva', NULL),
+               IIF(c.EsPieDebil = 1, N'pie no dominante', NULL),
+               IIF(c.Calidad = 5, N'ejecución 5/5', NULL),
+               IIF(c.Minuto >= 75, N'tramo final', NULL)))
     FROM #c c WHERE c.Pick IS NOT NULL;
   COMMIT;
   SELECT ReelId = @reel, Clips = @n;
 END
 GO
 
-CREATE OR ALTER PROCEDURE hl.usp_Reel_Datos @ReelId int, @Publico bit, @ExpiraEn datetime2(0) = NULL
+CREATE OR ALTER PROCEDURE hl.usp_Reel_Datos @ReelId int, @Publico bit, @ExpiraEn datetime2(0) = NULL, @IncluyePartidos bit = 0
 AS
 BEGIN
   SET NOCOUNT ON;
   IF @Publico = 1
     -- Lo que recibe un visor sin cuenta: solo año de nacimiento y, por defecto, el contacto del club.
     -- El contacto personal o del tutor aparece únicamente si es mayor de edad o el tutor lo autorizó.
-    SELECT r.ReelId, r.Titulo, r.DuracionSeg, ExpiraEn = @ExpiraEn,
+    SELECT r.ReelId, r.Titulo, r.DuracionSeg, r.Modo, ExpiraEn = @ExpiraEn, IncluyePartidos = @IncluyePartidos,
+           TarjetaSeg = cat.fn_Param('REEL_TARJETA_SEG'), CongeladoSeg = cat.fn_Param('REEL_CONGELADO_SEG'),
            Jugador = CONCAT(j.Nombre, ' ', j.Apellidos), j.Dorsal, Posicion = p.Nombre, PosicionSecundaria = p2.Nombre,
            j.PieDominante, j.EstaturaCm, j.PesoKg, AnioNacimiento = YEAR(j.FechaNacimiento), j.AnioGraduacion, j.PromedioAcademico,
            Equipo = e.Nombre, j.Bio, j.FotoMedioId,
@@ -264,7 +299,8 @@ BEGIN
     CROSS APPLY (SELECT Permite = fut.fn_Permiso(j.JugadorId, 'CONTACTO')) pc
     WHERE r.ReelId = @ReelId;
   ELSE
-    SELECT r.ReelId, r.Titulo, r.Estado, r.DuracionSeg, r.DuracionObjetivoSeg, r.ErrorProceso, r.CreadoEn, r.TemporadaId,
+    SELECT r.ReelId, r.Titulo, r.Estado, r.DuracionSeg, r.DuracionObjetivoSeg, r.ErrorProceso, r.CreadoEn, r.TemporadaId, r.Modo,
+           TarjetaSeg = cat.fn_Param('REEL_TARJETA_SEG'), CongeladoSeg = cat.fn_Param('REEL_CONGELADO_SEG'),
            j.JugadorId, Jugador = CONCAT(j.Nombre, ' ', j.Apellidos), j.Dorsal, Posicion = p.Nombre, PosicionSecundaria = p2.Nombre,
            Equipo = e.Nombre, EsMenor = fut.fn_EsMenor(j.JugadorId), PuedeCompartir = fut.fn_Permiso(j.JugadorId, 'REEL'),
            DuracionEstimada = (SELECT SUM(c.SegundoFin - c.SegundoInicio) FROM hl.ReelClip rc JOIN hl.Clip c ON c.ClipId = rc.ClipId WHERE rc.ReelId = r.ReelId)
@@ -275,26 +311,42 @@ BEGIN
     LEFT JOIN fut.Equipo e ON e.EquipoId = j.EquipoId
     WHERE r.ReelId = @ReelId;
 
-  SELECT rc.Orden, rc.ClipId, MedioId = IIF(@Publico = 1, NULL, v.MedioId), v.TipoEvento, v.Categoria,
-         v.SegundoInicio, v.SegundoFin, v.DuracionSeg, v.Minuto, v.Rival, v.NivelRival, v.FechaPartido,
-         v.MarcaX, v.MarcaY, v.Calidad, v.EsDecisiva, v.EsPieDebil, rc.Motivo, Puntaje = v.PuntajeReclutamiento
+  -- los videos fuente solo se identifican si el enlace incluye los partidos completos
+  SELECT rc.Orden, rc.ClipId, MedioId = IIF(@Publico = 1 AND @IncluyePartidos = 0, NULL, v.MedioId), v.TipoEvento, v.Categoria,
+         v.SegundoInicio, v.SegundoFin, v.DuracionSeg, v.Minuto, v.Rival, v.NivelRival, v.FechaPartido, v.ColorUniforme, v.Resultado,
+         v.MarcaX, v.MarcaY, v.MarcaTamano, v.MarcaSegundo, v.Calidad, v.EsDecisiva, v.EsPieDebil, rc.Motivo, Puntaje = v.PuntajeReclutamiento
   FROM hl.ReelClip rc JOIN hl.vw_ClipPuntaje v ON v.ClipId = rc.ClipId
   WHERE rc.ReelId = @ReelId ORDER BY rc.Orden;
 
-  IF @Publico = 1 RETURN;
+  IF @Publico = 1
+  BEGIN
+    -- partidos completos de donde salen las jugadas: el visor los pide para ver lo que no entra en un highlight
+    IF @IncluyePartidos = 1
+      SELECT DISTINCT m.MedioId, m.Titulo, m.DuracionSeg, FechaPartido = p.Fecha, p.ColorUniforme, p.Competencia,
+             Partido = IIF(p.PartidoId IS NULL, NULL, CONCAT(el.Nombre, ' ', p.GolesLocal, ' - ', p.GolesVisita, ' ', ev.Nombre))
+      FROM hl.ReelClip rc JOIN hl.Clip c ON c.ClipId = rc.ClipId
+      JOIN med.Medio m ON m.MedioId = c.MedioId AND m.Eliminado = 0 AND m.Estado = 'LISTO'
+      LEFT JOIN fut.Partido p ON p.PartidoId = m.PartidoId
+      LEFT JOIN fut.Equipo el ON el.EquipoId = p.EquipoLocalId
+      LEFT JOIN fut.Equipo ev ON ev.EquipoId = p.EquipoVisitaId
+      WHERE rc.ReelId = @ReelId ORDER BY FechaPartido, m.MedioId;
+    RETURN;
+  END
 
   -- observaciones sobre el montaje + diagnóstico del material del jugador
-  DECLARE @jug int, @temp int, @durTotal decimal(9,2), @primero int, @mejorNoIncluida nvarchar(200);
-  SELECT @jug = JugadorId, @temp = TemporadaId FROM hl.Reel WHERE ReelId = @ReelId;
+  DECLARE @jug int, @temp int, @durTotal decimal(9,2), @primero int, @mejorNoIncluida nvarchar(200), @modo varchar(10);
+  SELECT @jug = JugadorId, @temp = TemporadaId, @modo = Modo FROM hl.Reel WHERE ReelId = @ReelId;
   SELECT @durTotal = SUM(c.SegundoFin - c.SegundoInicio) FROM hl.ReelClip rc JOIN hl.Clip c ON c.ClipId = rc.ClipId WHERE rc.ReelId = @ReelId;
   SELECT @primero = ClipId FROM hl.ReelClip WHERE ReelId = @ReelId AND Orden = 1;
 
   DECLARE @o TABLE (Orden int IDENTITY, Severidad varchar(5), Mensaje nvarchar(400));
-  IF @durTotal > 330
+  IF @modo = 'PARTIDO'
+    INSERT @o VALUES ('INFO', N'Reel de partido: muestra todas las acciones marcadas, en orden y con las fallidas. Vale tanto como completo sea el marcado de ese partido.');
+  IF @modo = 'MEJORES' AND @durTotal > 330
     INSERT @o VALUES ('MEDIA', CONCAT(N'El reel dura ', CAST(@durTotal / 60 AS decimal(4,1)), N' min. Pocos visores pasan del minuto 4: recorta a tus mejores jugadas.'));
   IF @durTotal < 60
     INSERT @o VALUES ('MEDIA', N'El reel dura menos de un minuto; es poco para evaluar a un jugador.');
-  IF @primero IS NOT NULL AND @primero NOT IN (
+  IF @modo = 'MEJORES' AND @primero IS NOT NULL AND @primero NOT IN (
        SELECT TOP 3 rc.ClipId FROM hl.ReelClip rc JOIN hl.vw_ClipPuntaje v ON v.ClipId = rc.ClipId
        WHERE rc.ReelId = @ReelId ORDER BY v.PuntajeReclutamiento DESC)
     INSERT @o VALUES ('MEDIA', N'El reel no abre con una de sus tres mejores jugadas. La decisión de seguir viendo se toma en los primeros 30 segundos.');
@@ -304,7 +356,7 @@ BEGIN
     AND NOT EXISTS (SELECT 1 FROM hl.ReelClip rc WHERE rc.ReelId = @ReelId AND rc.ClipId = v.ClipId)
     AND v.PuntajeReclutamiento > (SELECT MIN(v2.PuntajeReclutamiento) FROM hl.ReelClip rc JOIN hl.vw_ClipPuntaje v2 ON v2.ClipId = rc.ClipId WHERE rc.ReelId = @ReelId) + 10
   ORDER BY v.PuntajeReclutamiento DESC;
-  IF @mejorNoIncluida IS NOT NULL
+  IF @modo = 'MEJORES' AND @mejorNoIncluida IS NOT NULL
     INSERT @o VALUES ('INFO', CONCAT(N'Hay una jugada fuera del reel con mejor puntaje que la más débil incluida: ', @mejorNoIncluida,
                       N'. Puede haberse omitido por variedad; valora cambiarla.'));
 
@@ -315,7 +367,7 @@ BEGIN
   ORDER BY Bloque, Orden;
 
   -- enlaces entregados: a quién, hasta cuándo y cuántas veces se abrió
-  SELECT e.EnlaceId, e.Token, e.Destinatario, e.ExpiraEn, e.RevocadoEn, e.Vistas, e.UltimaVistaEn, e.CreadoEn,
+  SELECT e.EnlaceId, e.Token, e.Destinatario, e.IncluyePartidos, e.ExpiraEn, e.RevocadoEn, e.Vistas, e.UltimaVistaEn, e.CreadoEn,
          Estado = CASE WHEN e.RevocadoEn IS NOT NULL THEN 'REVOCADO' WHEN e.ExpiraEn <= SYSUTCDATETIME() THEN 'VENCIDO' ELSE 'VIGENTE' END
   FROM hl.ReelEnlace e WHERE e.ReelId = @ReelId ORDER BY e.CreadoEn DESC, e.EnlaceId DESC;
 END
@@ -337,8 +389,9 @@ BEGIN
   SET NOCOUNT ON;
   DECLARE @id int = hl.fn_EnlaceReel(@Token), @expira datetime2(0);
   IF @id IS NULL THROW 50404, N'Este enlace no existe, venció o fue retirado. Pide uno nuevo al club.', 1;
-  UPDATE hl.ReelEnlace SET Vistas += 1, UltimaVistaEn = SYSUTCDATETIME(), @expira = ExpiraEn WHERE Token = @Token;
-  EXEC hl.usp_Reel_Datos @id, 1, @expira;
+  DECLARE @partidos bit;
+  UPDATE hl.ReelEnlace SET Vistas += 1, UltimaVistaEn = SYSUTCDATETIME(), @expira = ExpiraEn, @partidos = IncluyePartidos WHERE Token = @Token;
+  EXEC hl.usp_Reel_Datos @id, 1, @expira, @partidos;
 END
 GO
 
@@ -346,7 +399,7 @@ CREATE OR ALTER PROCEDURE api.usp_Reel_Listar @JugadorId int = NULL
 AS
 BEGIN
   SET NOCOUNT ON;
-  SELECT r.ReelId, r.Titulo, r.Estado, r.DuracionSeg, r.CreadoEn, r.JugadorId, Jugador = CONCAT(j.Nombre, ' ', j.Apellidos),
+  SELECT r.ReelId, r.Titulo, r.Estado, r.Modo, r.DuracionSeg, r.CreadoEn, r.JugadorId, Jugador = CONCAT(j.Nombre, ' ', j.Apellidos),
          Posicion = p.Nombre, Publicado = CAST(IIF(EXISTS (SELECT 1 FROM hl.ReelEnlace e WHERE e.ReelId = r.ReelId AND e.RevocadoEn IS NULL AND e.ExpiraEn > SYSUTCDATETIME()), 1, 0) AS bit),
          Clips = (SELECT COUNT(*) FROM hl.ReelClip rc WHERE rc.ReelId = r.ReelId)
   FROM hl.Reel r JOIN fut.Jugador j ON j.JugadorId = r.JugadorId JOIN cat.Posicion p ON p.PosicionId = j.PosicionId
@@ -445,8 +498,8 @@ BEGIN
   HAVING COUNT(v.ClipId) > 0 OR ISNULL(ppe.EsClave, 0) = 1
   ORDER BY ISNULL(ppe.Multiplicador, 1) DESC, COUNT(v.ClipId) DESC;
 
-  SELECT TOP 30 v.ClipId, v.MedioId, v.TipoEvento, v.Categoria, v.SegundoInicio, v.SegundoFin, v.SegundoEvento, v.Minuto, v.Rival,
-         v.NivelRival, v.FechaPartido, v.Calidad, v.EsDecisiva, v.EsPieDebil, v.Resultado, v.MarcaX, v.MarcaY,
+  SELECT TOP 30 v.ClipId, v.MedioId, v.PartidoId, v.TipoEvento, v.Categoria, v.SegundoInicio, v.SegundoFin, v.SegundoEvento, v.Minuto, v.Rival,
+         v.NivelRival, v.FechaPartido, v.Calidad, v.EsDecisiva, v.EsPieDebil, v.Resultado, v.MarcaX, v.MarcaY, v.MarcaTamano, v.MarcaSegundo,
          v.Tecnico, v.Interaccion, v.Audio, Puntaje = v.PuntajeReclutamiento, v.MeGusta, v.Vistas,
          MedioListo = CAST(IIF(m.Estado = 'LISTO', 1, 0) AS bit)
   FROM hl.vw_ClipPuntaje v JOIN med.Medio m ON m.MedioId = v.MedioId
@@ -461,7 +514,7 @@ BEGIN
     AND (@TemporadaId IS NULL OR m.TemporadaId = @TemporadaId)
   ORDER BY m.CreadoEn DESC;
 
-  SELECT r.ReelId, r.Titulo, r.Estado, r.DuracionSeg, r.CreadoEn, Publicado = CAST(IIF(EXISTS (SELECT 1 FROM hl.ReelEnlace e WHERE e.ReelId = r.ReelId AND e.RevocadoEn IS NULL AND e.ExpiraEn > SYSUTCDATETIME()), 1, 0) AS bit),
+  SELECT r.ReelId, r.Titulo, r.Estado, r.Modo, r.DuracionSeg, r.CreadoEn, Publicado = CAST(IIF(EXISTS (SELECT 1 FROM hl.ReelEnlace e WHERE e.ReelId = r.ReelId AND e.RevocadoEn IS NULL AND e.ExpiraEn > SYSUTCDATETIME()), 1, 0) AS bit),
          Clips = (SELECT COUNT(*) FROM hl.ReelClip rc WHERE rc.ReelId = r.ReelId)
   FROM hl.Reel r WHERE r.JugadorId = @JugadorId ORDER BY r.CreadoEn DESC, r.ReelId DESC;
 

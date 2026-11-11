@@ -76,7 +76,7 @@ BEGIN
   SET NOCOUNT ON;
   SELECT p.PartidoId, p.TemporadaId, p.Fecha, p.Jornada, p.Competencia, p.Fase, FaseNombre = f.Nombre,
          p.EquipoLocalId, Local = el.Nombre, p.EquipoVisitaId, Visita = ev.Nombre,
-         p.GolesLocal, p.GolesVisita, p.NivelRival,
+         p.GolesLocal, p.GolesVisita, p.NivelRival, p.ColorUniforme,
          Videos = (SELECT COUNT(*) FROM med.Medio m WHERE m.PartidoId = p.PartidoId AND m.Tipo='VIDEO' AND m.Eliminado=0),
          Fotos  = (SELECT COUNT(*) FROM med.Medio m WHERE m.PartidoId = p.PartidoId AND m.Tipo='FOTO'  AND m.Eliminado=0)
   FROM fut.Partido p
@@ -91,7 +91,7 @@ GO
 CREATE OR ALTER PROCEDURE api.usp_Partido_Guardar
   @PartidoId int = NULL, @TemporadaId int, @Fecha date, @Jornada smallint = NULL, @Competencia nvarchar(80) = NULL,
   @Fase varchar(12) = 'LIGA', @EquipoLocalId int, @EquipoVisitaId int,
-  @GolesLocal tinyint = NULL, @GolesVisita tinyint = NULL, @NivelRival tinyint = 3
+  @GolesLocal tinyint = NULL, @GolesVisita tinyint = NULL, @NivelRival tinyint = 3, @ColorUniforme nvarchar(30) = NULL
 AS
 BEGIN
   SET NOCOUNT ON;
@@ -102,14 +102,15 @@ BEGIN
   IF @NivelRival NOT BETWEEN 1 AND 5 THROW 50400, N'El nivel del rival va de 1 a 5', 1;
   IF @PartidoId IS NULL
   BEGIN
-    INSERT fut.Partido(TemporadaId, Fecha, Jornada, Competencia, Fase, EquipoLocalId, EquipoVisitaId, GolesLocal, GolesVisita, NivelRival)
-    VALUES (@TemporadaId, @Fecha, @Jornada, @Competencia, @Fase, @EquipoLocalId, @EquipoVisitaId, @GolesLocal, @GolesVisita, @NivelRival);
+    INSERT fut.Partido(TemporadaId, Fecha, Jornada, Competencia, Fase, EquipoLocalId, EquipoVisitaId, GolesLocal, GolesVisita, NivelRival, ColorUniforme)
+    VALUES (@TemporadaId, @Fecha, @Jornada, @Competencia, @Fase, @EquipoLocalId, @EquipoVisitaId, @GolesLocal, @GolesVisita, @NivelRival, NULLIF(LTRIM(RTRIM(@ColorUniforme)), ''));
     SET @PartidoId = SCOPE_IDENTITY();
   END
   ELSE
   BEGIN
     UPDATE fut.Partido SET TemporadaId=@TemporadaId, Fecha=@Fecha, Jornada=@Jornada, Competencia=@Competencia, Fase=@Fase,
-           EquipoLocalId=@EquipoLocalId, EquipoVisitaId=@EquipoVisitaId, GolesLocal=@GolesLocal, GolesVisita=@GolesVisita, NivelRival=@NivelRival
+           EquipoLocalId=@EquipoLocalId, EquipoVisitaId=@EquipoVisitaId, GolesLocal=@GolesLocal, GolesVisita=@GolesVisita, NivelRival=@NivelRival,
+           ColorUniforme=NULLIF(LTRIM(RTRIM(@ColorUniforme)), '')
     WHERE PartidoId = @PartidoId;
     IF @@ROWCOUNT = 0 THROW 50404, N'Partido no encontrado', 1;
   END

@@ -88,7 +88,8 @@ const golElite = (await exec('clip.guardar', { clipId: candidatos[0].clipId, jug
 const golLiga = await clip(v2, 'GOL', 21, { calidad: 3, pie: 'D' });
 const gol2 = await clip(v2, 'GOL', 46, { calidad: 3, pie: 'D' });
 const gol3 = await clip(v2, 'GOL', 60, { calidad: 3 });
-const desmarque = await clip(v1, 'DESMARQUE', 33, { calidad: 4, marcaX: 60, marcaY: 40 });
+// marca puesta a mitad del clip (cuando el jugador entra a la jugada) y con recuadro pequeño
+const desmarque = await clip(v1, 'DESMARQUE', 33, { calidad: 4, marcaX: 60, marcaY: 40, marcaTamano: 9, marcaSegundo: 30.5 });
 const presion = await clip(v1, 'PRESION', 55, { calidad: 4 });
 const fallida = await clip(v2, 'TIRO_PUERTA', 10, { calidad: 2, resultado: 'F' });
 assert.ok(golElite.puntajeReclutamiento > golLiga.puntajeReclutamiento + 15, 'rival élite + decisiva + pie débil + calidad deben pesar');
@@ -135,7 +136,12 @@ reel = await esperar(async () => {
   if (r.estado === 'ERROR') throw new Error(r.errorProceso);
   return r.estado === 'LISTO' && r;
 }, 'reel renderizado', 180);
-paso(`reel renderizado (${reel.duracionSeg}s)`);
+const esperado = reel.tarjetaSeg + clips.reduce((s, c) => s + c.duracionSeg + (c.marcaX != null ? reel.congeladoSeg : 0), 0);
+assert.ok(Math.abs(reel.duracionSeg - esperado) < 1.5, `duración ${reel.duracionSeg}s, esperada ${esperado}s (tarjeta + jugadas + congelados)`);
+assert.ok(esperado <= 90 + 6, 'la duración objetivo incluye tarjeta y cuadros congelados');
+const cDesm = clips.find(c => c.clipId === desmarque.clipId);
+assert.equal(cDesm.marcaSegundo, 30.5); assert.equal(cDesm.marcaTamano, 9);
+paso(`reel renderizado (${reel.duracionSeg}s, con marca a mitad de jugada)`);
 
 // --- criterio de visoría
 assert.equal(golElite.puntajeReclutamiento, golElite.tecnico, 'el puntaje de reclutamiento es solo el valor técnico');
@@ -189,5 +195,25 @@ const [[conContacto]] = await exec('reel.publico', { token: token2 });
 assert.equal(conContacto.correoPersonal, 'diego.ramirez@example.com', 'con autorización de contacto sí aparece');
 cookie = sesion;
 paso('enlaces por destinatario: registro de vistas, retiro individual y revocación del tutor');
+
+// --- reel de un partido: todo lo marcado, en orden y con las fallidas
+const [[{ reelId: reelPartido }]] = await exec('reel.generar', { jugadorId: dc.jugadorId, modo: 'PARTIDO', partidoId: liga.partidoId });
+const [[rp], clipsP] = await exec('reel.obtener', { reelId: reelPartido });
+assert.equal(rp.modo, 'PARTIDO');
+assert.deepEqual(clipsP.map(c => c.clipId), [fallida.clipId, golLiga.clipId, gol2.clipId, gol3.clipId], 'orden cronológico e incluye la fallida');
+await exec('reel.generar', { jugadorId: dc.jugadorId, modo: 'PARTIDO' }, { espera: 400 });
+
+// --- enlace que incluye los partidos completos
+const [[{ token: tokenPartidos }]] = await exec('reel.enlaceCrear', { reelId, destinatario: 'Club profesional', incluyePartidos: true });
+cookie = '';
+const [, clipsPub, partidosPub] = await exec('reel.publico', { token: tokenPartidos });
+assert.deepEqual(partidosPub.map(x => x.medioId).sort(), [v1, v2].sort());
+assert.ok(partidosPub.every(x => x.colorUniforme), 'se informa el color del uniforme');
+assert.ok(clipsPub.every(c => c.medioId), 'las jugadas sirven de índice del partido');
+assert.equal((await fetch(`${API}/api/archivo/${v1}?k=${tokenPartidos}`, { headers: { Range: 'bytes=0-99' } })).status, 206);
+assert.equal((await fetch(`${API}/api/archivo/${v1}?k=${token2}`)).status, 401, 'un enlace sin partidos no abre los videos fuente');
+assert.equal((await fetch(`${API}/api/archivo/${fotoId}?v=orig&k=${tokenPartidos}`)).status, 401, 'ni otros archivos');
+cookie = sesion;
+paso('reel de partido completo y enlace con partidos completos');
 
 console.log(`\nTodo correcto. reelId=${reelId} token=${token2} jugadorId=${dc.jugadorId} video=${v1}`);

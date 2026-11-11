@@ -20,7 +20,8 @@ export default function ClipPlayer({ clip, alTerminar, auto = true }: { clip: an
 
   const tiempo = () => {
     const v = ref.current!; const t = v.currentTime;
-    setMarca(clip.marcaX != null && t - clip.segundoInicio < 2.2);
+    const ms = clip.marcaSegundo ?? clip.segundoInicio;
+    setMarca(clip.marcaX != null && t >= ms - 0.3 && t < ms + 2);
     if (!contada.current && t - clip.segundoInicio > 2) {      // cuenta como vista al pasar de 2 s
       contada.current = true; exec('clip.interaccion', { clipId: clip.clipId, tipo: 'VISTA' }).catch(() => {});
     }
@@ -36,7 +37,7 @@ export default function ClipPlayer({ clip, alTerminar, auto = true }: { clip: an
       <div className="reproductor" style={prop ? { aspectRatio: prop } : undefined}>
         <video ref={ref} src={urlMedio(clip.medioId)} controls playsInline onTimeUpdate={tiempo}
           onLoadedMetadata={e => e.currentTarget.videoWidth && setProp(`${e.currentTarget.videoWidth}/${e.currentTarget.videoHeight}`)} />
-        {marca && <div className="marca-jugador" style={{ left: `${clip.marcaX}%`, top: `${clip.marcaY}%` }} />}
+        {marca && <div className="marca-jugador" style={{ left: `${clip.marcaX}%`, top: `${clip.marcaY}%`, height: `${clip.marcaTamano ?? 12}%` }} />}
       </div>
       <div className="fila" style={{ marginTop: 8 }}>
         <button className="btn sec mini" onClick={repetir}>↺ Repetir{fin ? ' jugada' : ''}</button>

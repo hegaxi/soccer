@@ -186,7 +186,11 @@ public sealed class ProcesadorMedios(EjecutorSp ejecutor, Almacen almacen, IConf
             const string norma = "-c:v libx264 -preset veryfast -crf 21 -pix_fmt yuv420p -r 30 -an -video_track_timescale 15360";
             var partes = new List<string>();
 
-            // 1 · tarjeta inicial (4 s) con los datos del jugador
+            var tarjetaSeg = Convert.ToDouble(t["tarjetaSeg"] ?? 4.0);
+            var congelado = Convert.ToDouble(t["congeladoSeg"] ?? 1.0);
+            string N(double v) => v.ToString("0.###", Inv);
+
+            // 1 · tarjeta inicial con los datos del jugador
             var intro = Path.Combine(tmp, "000.mp4");
             var filtros = new List<string>();
             var y = 250 - tarjeta.Count * 18;
@@ -199,45 +203,59 @@ public sealed class ProcesadorMedios(EjecutorSp ejecutor, Almacen almacen, IConf
                             $"fontcolor={(i == 0 ? "white" : "0xcbd5e1")}:x=(w-text_w)/2:y={y}");
                 y += tam + (i == 0 ? 34 : 20);
             }
-            var argsIntro = new List<string> { "-f", "lavfi", "-i", "color=c=0x0b1220:s=1280x720:d=4:r=30" };
+            var argsIntro = new List<string> { "-f", "lavfi", "-i", $"color=c=0x0b1220:s=1280x720:d={N(tarjetaSeg)}:r=30" };
             if (filtros.Count > 0) { argsIntro.Add("-vf"); argsIntro.Add(string.Join(",", filtros)); }
             argsIntro.AddRange(norma.Split(' ')); argsIntro.Add(intro);
             await Ffmpeg(ct, [.. argsIntro]);
             partes.Add(intro);
 
-            // 2 · cada jugada: recorte, 1280x720, y si hay marca se congela el primer cuadro señalando al jugador
+            // 2 · cada jugada, a 1280x720. Si tiene marca, el cuadro se congela en el momento indicado
+            //     (cuando el jugador entra a la jugada) con un recuadro del tamaño elegido.
             var n = 1;
             foreach (var c in clips)
             {
                 var origen = almacen.RutaFisica((string)c["ruta"]!);
                 var ini = Convert.ToDouble(c["segundoInicio"]); var fin = Convert.ToDouble(c["segundoFin"]);
-                var vf = new List<string> { "scale=1280:720:force_original_aspect_ratio=decrease:force_divisible_by=2", "fps=30" };
-                if (c["marcaX"] is not null && c["marcaY"] is not null)
-                {
-                    var mx = (Convert.ToDouble(c["marcaX"]) / 100).ToString("0.####", Inv);
-                    var my = (Convert.ToDouble(c["marcaY"]) / 100).ToString("0.####", Inv);
-                    vf.Add("tpad=start_mode=clone:start_duration=1.5");
-                    // recuadro amarillo con borde negro para que se distinga sobre cualquier fondo
-                    vf.Add($"drawbox=x=iw*{mx}-ih*0.06-3:y=ih*{my}-ih*0.11-3:w=ih*0.12+6:h=ih*0.22+6:color=black@0.9:t=11:enable='lt(t,1.5)'");
-                    vf.Add($"drawbox=x=iw*{mx}-ih*0.06:y=ih*{my}-ih*0.11:w=ih*0.12:h=ih*0.22:color=yellow:t=5:enable='lt(t,1.5)'");
-                }
-                vf.Add("pad=1280:720:(ow-iw)/2:(oh-ih)/2:color=black");
+                var conMarca = c["marcaX"] is not null && c["marcaY"] is not null;
+                var marcaSeg = conMarca && c["marcaSegundo"] is not null ? Math.Clamp(Convert.ToDouble(c["marcaSegundo"]), ini, fin - 0.5) : ini;
+                string? etiqueta = null;
                 if (c["etiqueta"] is string et && et.Length > 0 && _fuente.Length > 0)
                 {
-                    var txt = Path.Combine(tmp, $"e{n}.txt");
-                    await File.WriteAllTextAsync(txt, et, new UTF8Encoding(false), ct);
-                    vf.Add($"drawtext=fontfile='{Esc(_fuente)}':textfile='{Esc(txt)}':fontsize=26:fontcolor=white:" +
-                           "box=1:boxcolor=black@0.55:boxborderw=10:x=32:y=h-64:enable='lt(t,4)'");
+                    etiqueta = Path.Combine(tmp, $"e{n}.txt");
+                    await File.WriteAllTextAsync(etiqueta, et, new UTF8Encoding(false), ct);
                 }
-                var parte = Path.Combine(tmp, $"{n:000}.mp4");
-                var args = new List<string>
+
+                // tramos: [inicio, marca) normal y [marca, fin) con el cuadro congelado al principio
+                var tramos = new List<(double desde, double hasta, bool marca)>();
+                if (conMarca && marcaSeg - ini >= 0.4) { tramos.Add((ini, marcaSeg, false)); tramos.Add((marcaSeg, fin, true)); }
+                else tramos.Add((ini, fin, conMarca));
+
+                var k = 0;
+                foreach (var (desde, hasta, marca) in tramos)
                 {
-                    "-ss", ini.ToString("0.###", Inv), "-t", (fin - ini).ToString("0.###", Inv), "-i", origen,
-                    "-vf", string.Join(",", vf)
-                };
-                args.AddRange(norma.Split(' ')); args.Add(parte);
-                await Ffmpeg(ct, [.. args]);
-                partes.Add(parte); n++;
+                    var vf = new List<string> { "scale=1280:720:force_original_aspect_ratio=decrease:force_divisible_by=2", "fps=30" };
+                    if (marca)
+                    {
+                        var mx = N(Convert.ToDouble(c["marcaX"]) / 100); var my = N(Convert.ToDouble(c["marcaY"]) / 100);
+                        var alto = Convert.ToDouble(c["marcaTamano"] ?? 12.0) / 100;          // fracción del alto del cuadro
+                        var h = N(alto); var w = N(alto * 0.55); var h2 = N(alto / 2); var w2 = N(alto * 0.275);
+                        var cuando = $"enable='lt(t,{N(congelado)})'";
+                        vf.Add($"tpad=start_mode=clone:start_duration={N(congelado)}");
+                        // recuadro amarillo con borde negro para que se distinga sobre cualquier fondo
+                        vf.Add($"drawbox=x=iw*{mx}-ih*{w2}-3:y=ih*{my}-ih*{h2}-3:w=ih*{w}+6:h=ih*{h}+6:color=black@0.9:t=10:{cuando}");
+                        vf.Add($"drawbox=x=iw*{mx}-ih*{w2}:y=ih*{my}-ih*{h2}:w=ih*{w}:h=ih*{h}:color=yellow:t=4:{cuando}");
+                    }
+                    vf.Add("pad=1280:720:(ow-iw)/2:(oh-ih)/2:color=black");
+                    if (etiqueta is not null && k == 0)
+                        vf.Add($"drawtext=fontfile='{Esc(_fuente)}':textfile='{Esc(etiqueta)}':fontsize=24:fontcolor=white:" +
+                               "box=1:boxcolor=black@0.55:boxborderw=10:x=32:y=h-64:enable='lt(t,4)'");
+                    var parte = Path.Combine(tmp, $"{n:000}_{k}.mp4");
+                    var args = new List<string> { "-ss", N(desde), "-t", N(hasta - desde), "-i", origen, "-vf", string.Join(",", vf) };
+                    args.AddRange(norma.Split(' ')); args.Add(parte);
+                    await Ffmpeg(ct, [.. args]);
+                    partes.Add(parte); k++;
+                }
+                n++;
             }
 
             // 3 · unir sin recodificar

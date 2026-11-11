@@ -341,3 +341,20 @@ CREATE TABLE hl.ReelEnlace(
   CreadoPor     int NOT NULL CONSTRAINT FK_Enlace_Usuario REFERENCES seg.Usuario,
   CreadoEn      datetime2(0) NOT NULL CONSTRAINT DF_Enlace_Creado DEFAULT SYSUTCDATETIME());
 GO
+
+/* ---------- identificación del jugador y contexto para el visor ---------- */
+-- La marca se pone en el momento en que el jugador entra a la jugada (no necesariamente al inicio del clip)
+-- y con el tamaño que pide la toma: en cámara panorámica un jugador mide muy poco.
+IF COL_LENGTH('hl.Clip', 'MarcaTamano') IS NULL
+  ALTER TABLE hl.Clip ADD MarcaTamano decimal(4,1) NULL CONSTRAINT CK_Clip_MarcaTamano CHECK (MarcaTamano BETWEEN 4 AND 50), -- alto del recuadro, % del alto del cuadro
+                          MarcaSegundo decimal(9,2) NULL;                                                                   -- segundo del video en que se señala
+IF COL_LENGTH('fut.Partido', 'ColorUniforme') IS NULL
+  ALTER TABLE fut.Partido ADD ColorUniforme nvarchar(30) NULL;   -- de qué color jugó nuestro equipo: lo primero que pregunta un visor
+-- MEJORES = selección de highlights · PARTIDO = todas sus acciones en un partido, en orden y con las fallidas
+IF COL_LENGTH('hl.Reel', 'Modo') IS NULL
+  ALTER TABLE hl.Reel ADD Modo varchar(10) NOT NULL CONSTRAINT DF_Reel_Modo DEFAULT 'MEJORES' CONSTRAINT CK_Reel_Modo CHECK (Modo IN ('MEJORES','PARTIDO')),
+                          PartidoId int NULL CONSTRAINT FK_Reel_Partido REFERENCES fut.Partido;
+-- El enlace puede dar acceso también a los partidos completos de donde salen las jugadas
+IF COL_LENGTH('hl.ReelEnlace', 'IncluyePartidos') IS NULL
+  ALTER TABLE hl.ReelEnlace ADD IncluyePartidos bit NOT NULL CONSTRAINT DF_Enlace_Partidos DEFAULT 0;
+GO

@@ -27,14 +27,14 @@ GO
 CREATE OR ALTER VIEW hl.vw_ClipPuntaje AS
 SELECT c.ClipId, c.MedioId, c.JugadorId, c.TipoEventoId, m.TemporadaId, m.PartidoId,
        c.SegundoEvento, c.SegundoInicio, c.SegundoFin, DuracionSeg = c.SegundoFin - c.SegundoInicio,
-       c.Minuto, c.Resultado, c.Pie, c.Calidad, c.EsDecisiva, c.MarcaX, c.MarcaY, c.Nota, c.CreadoEn,
+       c.Minuto, c.Resultado, c.Pie, c.Calidad, c.EsDecisiva, c.MarcaX, c.MarcaY, c.MarcaTamano, c.MarcaSegundo, c.Nota, c.CreadoEn,
        TipoEvento = te.Nombre, TipoEventoClave = te.Clave, te.Categoria,
        Jugador = CONCAT(j.Nombre, ' ', j.Apellidos), j.PosicionId,
        MultPosicion = ISNULL(ppe.Multiplicador, 1.00),
        EsPieDebil = b.EsPieDebil,
        Rival = CASE WHEN p.PartidoId IS NULL THEN NULL
                     WHEN j.EquipoId = p.EquipoVisitaId THEN el.Nombre ELSE ev.Nombre END,
-       p.NivelRival, FechaPartido = p.Fecha, Fase = f.Nombre,
+       p.NivelRival, FechaPartido = p.Fecha, Fase = f.Nombre, p.ColorUniforme, j.Dorsal,
        Vistas = ISNULL(it.Vistas, 0), Repeticiones = ISNULL(it.Repeticiones, 0), MeGusta = ISNULL(mg.MeGusta, 0),
        Tecnico     = CAST(x.Tecnico AS decimal(6,2)),
        Interaccion = CAST(x.Interaccion AS decimal(6,2)),
@@ -81,7 +81,8 @@ CREATE OR ALTER PROCEDURE api.usp_Clip_Guardar
   @ClipId int = NULL, @MedioId int = NULL, @JugadorId int, @TipoEventoId smallint, @SegundoEvento decimal(9,2),
   @SegundoInicio decimal(9,2) = NULL, @SegundoFin decimal(9,2) = NULL, @Minuto tinyint = NULL,
   @Resultado char(1) = 'E', @Pie char(1) = NULL, @Calidad tinyint = NULL, @EsDecisiva bit = 0,
-  @MarcaX decimal(5,2) = NULL, @MarcaY decimal(5,2) = NULL, @Nota nvarchar(300) = NULL, @_UsuarioId int
+  @MarcaX decimal(5,2) = NULL, @MarcaY decimal(5,2) = NULL, @MarcaTamano decimal(4,1) = NULL, @MarcaSegundo decimal(9,2) = NULL,
+  @Nota nvarchar(300) = NULL, @_UsuarioId int
 AS
 BEGIN
   SET NOCOUNT ON;
@@ -108,22 +109,32 @@ BEGIN
   IF @SegundoFin - @SegundoInicio > 45 THROW 50400, N'El clip no debe pasar de 45 segundos; recorta a lo esencial', 1;
   IF @SegundoEvento NOT BETWEEN @SegundoInicio AND @SegundoFin THROW 50400, N'El momento de la jugada debe quedar dentro del clip', 1;
 
+  -- marca del jugador: posición, tamaño y momento. Sin posición no hay marca.
+  IF @MarcaX IS NULL OR @MarcaY IS NULL SELECT @MarcaX = NULL, @MarcaY = NULL, @MarcaTamano = NULL, @MarcaSegundo = NULL;
+  ELSE
+  BEGIN
+    SET @MarcaTamano = ISNULL(@MarcaTamano, cat.fn_Param('MARCA_TAMANO_DEF'));
+    IF @MarcaTamano NOT BETWEEN 4 AND 50 THROW 50400, N'El tamaño de la marca va de 4 a 50 % del alto del cuadro', 1;
+    -- si no se indicó cuándo (o quedó fuera al recortar el clip), se señala al inicio
+    IF @MarcaSegundo IS NULL OR @MarcaSegundo < @SegundoInicio OR @MarcaSegundo > @SegundoFin - 1 SET @MarcaSegundo = @SegundoInicio;
+  END
+
   IF @Minuto IS NULL AND @ini IS NOT NULL AND @SegundoEvento >= @ini
     SET @Minuto = CAST(LEAST(130, FLOOR((@SegundoEvento - @ini) / 60) + 1) AS tinyint);
 
   IF @ClipId IS NULL
   BEGIN
     INSERT hl.Clip(MedioId, JugadorId, TipoEventoId, SegundoEvento, SegundoInicio, SegundoFin, Minuto, Resultado, Pie, Calidad,
-                   EsDecisiva, MarcaX, MarcaY, Nota, Origen, Estado, CreadoPor)
+                   EsDecisiva, MarcaX, MarcaY, MarcaTamano, MarcaSegundo, Nota, Origen, Estado, CreadoPor)
     VALUES (@MedioId, @JugadorId, @TipoEventoId, @SegundoEvento, @SegundoInicio, @SegundoFin, @Minuto, @Resultado, @Pie, @Calidad,
-            @EsDecisiva, @MarcaX, @MarcaY, @Nota, 'MANUAL', 'CONFIRMADO', @_UsuarioId);
+            @EsDecisiva, @MarcaX, @MarcaY, @MarcaTamano, @MarcaSegundo, @Nota, 'MANUAL', 'CONFIRMADO', @_UsuarioId);
     SET @ClipId = SCOPE_IDENTITY();
   END
   ELSE
   BEGIN
     UPDATE hl.Clip SET JugadorId=@JugadorId, TipoEventoId=@TipoEventoId, SegundoEvento=@SegundoEvento, SegundoInicio=@SegundoInicio,
            SegundoFin=@SegundoFin, Minuto=@Minuto, Resultado=@Resultado, Pie=@Pie, Calidad=@Calidad, EsDecisiva=@EsDecisiva,
-           MarcaX=@MarcaX, MarcaY=@MarcaY, Nota=@Nota, Estado='CONFIRMADO'
+           MarcaX=@MarcaX, MarcaY=@MarcaY, MarcaTamano=@MarcaTamano, MarcaSegundo=@MarcaSegundo, Nota=@Nota, Estado='CONFIRMADO'
     WHERE ClipId = @ClipId;
     -- un reel ya renderizado que incluye esta jugada queda desactualizado
     UPDATE r SET Estado = 'BORRADOR' FROM hl.Reel r
@@ -197,7 +208,7 @@ BEGIN
          Puntaje = IIF(@Modo = 'GENERAL', v.PuntajeGeneral, v.PuntajeReclutamiento),
          v.ClipId, v.MedioId, v.JugadorId, v.Jugador, v.TipoEventoId, v.TipoEvento, v.Categoria,
          v.SegundoInicio, v.SegundoFin, v.SegundoEvento, v.Minuto, v.Resultado, v.Pie, v.Calidad, v.EsDecisiva, v.EsPieDebil,
-         v.MarcaX, v.MarcaY, v.Nota, v.Rival, v.NivelRival, v.FechaPartido, v.Fase,
+         v.MarcaX, v.MarcaY, v.MarcaTamano, v.MarcaSegundo, v.Nota, v.Rival, v.NivelRival, v.FechaPartido, v.Fase,
          v.Tecnico, v.Interaccion, v.Audio, v.Vistas, v.MeGusta,
          MiMeGusta = CAST(IIF(EXISTS (SELECT 1 FROM hl.MeGusta g WHERE g.ClipId = v.ClipId AND g.UsuarioId = @_UsuarioId), 1, 0) AS bit)
   FROM hl.vw_ClipPuntaje v
@@ -280,7 +291,7 @@ BEGIN
 
   SELECT c.ClipId, c.Estado, c.Origen, c.JugadorId, Jugador = CONCAT(j.Nombre, ' ', j.Apellidos), c.TipoEventoId, TipoEvento = te.Nombre,
          te.Categoria, c.SegundoEvento, c.SegundoInicio, c.SegundoFin, c.Minuto, c.Resultado, c.Pie, c.Calidad, c.EsDecisiva,
-         c.MarcaX, c.MarcaY, c.Nota, v.Tecnico, v.Interaccion, v.Audio, v.PuntajeGeneral, v.PuntajeReclutamiento,
+         c.MarcaX, c.MarcaY, c.MarcaTamano, c.MarcaSegundo, c.Nota, v.Tecnico, v.Interaccion, v.Audio, v.PuntajeGeneral, v.PuntajeReclutamiento,
          MeGusta = ISNULL(v.MeGusta, 0), Vistas = ISNULL(v.Vistas, 0),
          MiMeGusta = CAST(IIF(EXISTS (SELECT 1 FROM hl.MeGusta g WHERE g.ClipId = c.ClipId AND g.UsuarioId = @_UsuarioId), 1, 0) AS bit)
   FROM hl.Clip c
