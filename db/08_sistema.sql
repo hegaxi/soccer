@@ -28,7 +28,7 @@ END
 GO
 
 /* Variante: 'orig' archivo original · 'web' versión reproducible · 'mini' miniatura.
-   Sin sesión solo se entrega la foto de perfil del jugador de un reel publicado. */
+   Sin sesión solo se entrega la foto de perfil del jugador de un reel con enlace vigente. */
 CREATE OR ALTER PROCEDURE sis.usp_Archivo_AutorizarLectura
   @MedioId int, @Variante varchar(5) = 'web', @TokenPublico varchar(40) = NULL, @_UsuarioId int = NULL
 AS
@@ -37,9 +37,8 @@ BEGIN
   IF @Variante NOT IN ('orig','web','mini') THROW 50400, N'Variante inválida', 1;
   IF @_UsuarioId IS NULL
   BEGIN
-    IF @TokenPublico IS NULL OR NOT EXISTS (
-         SELECT 1 FROM hl.Reel r JOIN fut.Jugador j ON j.JugadorId = r.JugadorId
-         WHERE r.TokenPublico = @TokenPublico AND r.Estado = 'LISTO' AND j.FotoMedioId = @MedioId)
+    IF NOT EXISTS (SELECT 1 FROM hl.Reel r JOIN fut.Jugador j ON j.JugadorId = r.JugadorId
+                   WHERE r.ReelId = hl.fn_EnlaceReel(@TokenPublico) AND j.FotoMedioId = @MedioId)
       THROW 50401, N'Inicia sesión para continuar', 1;
     IF @Variante = 'orig' SET @Variante = 'web';
   END
@@ -57,10 +56,9 @@ CREATE OR ALTER PROCEDURE sis.usp_Archivo_AutorizarReel @ReelId int, @TokenPubli
 AS
 BEGIN
   SET NOCOUNT ON;
-  DECLARE @ruta varchar(300), @token varchar(40);
-  SELECT @ruta = RutaVideo, @token = TokenPublico FROM hl.Reel WHERE ReelId = @ReelId AND Estado = 'LISTO';
+  DECLARE @ruta varchar(300) = (SELECT RutaVideo FROM hl.Reel WHERE ReelId = @ReelId AND Estado = 'LISTO');
   IF @ruta IS NULL THROW 50404, N'El video del reel no está disponible', 1;
-  IF @_UsuarioId IS NULL AND (@TokenPublico IS NULL OR @token IS NULL OR @token <> @TokenPublico)
+  IF @_UsuarioId IS NULL AND ISNULL(hl.fn_EnlaceReel(@TokenPublico), 0) <> @ReelId
     THROW 50401, N'Inicia sesión para continuar', 1;
   SELECT Ruta = @ruta, Mime = 'video/mp4';
 END
@@ -151,7 +149,9 @@ BEGIN
   FROM hl.ReelClip rc JOIN hl.vw_ClipPuntaje v ON v.ClipId = rc.ClipId JOIN med.Medio m ON m.MedioId = v.MedioId
   WHERE rc.ReelId = @reel ORDER BY rc.Orden;
 
-  -- tarjeta inicial: lo que un visor necesita saber antes de la primera jugada
+  -- tarjeta inicial: lo que un visor necesita saber antes de la primera jugada.
+  -- El video se puede descargar y ya no se puede retirar: por eso no lleva contacto ni fecha de nacimiento completa
+  -- (el contacto está en la página del enlace, que sí caduca y se revoca).
   SELECT x.Orden, x.Texto, x.Tamano
   FROM hl.Reel r
   JOIN fut.Jugador j ON j.JugadorId = r.JugadorId
@@ -161,13 +161,12 @@ BEGIN
   CROSS APPLY (VALUES
     (1, UPPER(CONCAT(j.Nombre, ' ', j.Apellidos)), 68),
     (2, CONCAT_WS(N'  |  ', p.Nombre + ISNULL(N' / ' + p2.Nombre, N''), N'#' + CAST(j.Dorsal AS nvarchar(3)), e.Nombre), 38),
-    (3, CONCAT_WS(N'  |  ', N'Generación ' + CAST(j.AnioGraduacion AS nvarchar(4)),
+    (3, CONCAT_WS(N'  |  ', N'Categoría ' + CAST(YEAR(j.FechaNacimiento) AS nvarchar(4)),
                   CAST(CAST(j.EstaturaCm / 100.0 AS decimal(3,2)) AS nvarchar(5)) + N' m',
                   CAST(j.PesoKg AS nvarchar(3)) + N' kg',
                   CASE j.PieDominante WHEN 'D' THEN N'Pie derecho' WHEN 'I' THEN N'Pie izquierdo' ELSE N'Ambidiestro' END,
-                  N'Nac. ' + CONVERT(nvarchar(10), j.FechaNacimiento, 103)), 30),
-    (4, CONCAT_WS(N'  |  ', j.CorreoContacto, j.TelefonoContacto), 28),
-    (5, r.Titulo, 22)
+                  N'Class of ' + CAST(j.AnioGraduacion AS nvarchar(4))), 30),
+    (4, r.Titulo, 22)
   ) x(Orden, Texto, Tamano)
   WHERE r.ReelId = @reel AND NULLIF(x.Texto, N'') IS NOT NULL
   ORDER BY x.Orden;

@@ -2,16 +2,110 @@
    07 · Reclutamiento: diagnóstico del material y reel del jugador
    ============================================================ */
 
+/* ---------- menores: consentimiento del tutor ---------- */
+-- Sin fecha de nacimiento se trata como menor: es el lado seguro del error.
+CREATE OR ALTER FUNCTION fut.fn_EsMenor(@JugadorId int) RETURNS bit
+AS BEGIN
+  RETURN (SELECT CAST(IIF(FechaNacimiento IS NULL OR DATEADD(year, 18, FechaNacimiento) > CAST(SYSUTCDATETIME() AS date), 1, 0) AS bit)
+          FROM fut.Jugador WHERE JugadorId = @JugadorId)
+END
+GO
+
+/* ¿Se puede compartir fuera del club? @Alcance: 'REEL' (el video y el perfil) o 'CONTACTO' (contacto personal o del tutor).
+   Un mayor de edad decide por sí mismo; un menor necesita consentimiento vigente y no revocado con ese alcance. */
+CREATE OR ALTER FUNCTION fut.fn_Permiso(@JugadorId int, @Alcance varchar(10)) RETURNS bit
+AS BEGIN
+  IF fut.fn_EsMenor(@JugadorId) = 0 RETURN 1;
+  RETURN CAST(IIF(EXISTS (
+    SELECT 1 FROM fut.Consentimiento c
+    WHERE c.JugadorId = @JugadorId AND c.RevocadoEn IS NULL
+      AND (c.VigenteHasta IS NULL OR c.VigenteHasta >= CAST(SYSUTCDATETIME() AS date))
+      AND ((@Alcance = 'REEL' AND c.PermiteReelPublico = 1) OR (@Alcance = 'CONTACTO' AND c.PermiteContacto = 1))), 1, 0) AS bit);
+END
+GO
+
+CREATE OR ALTER PROCEDURE api.usp_Consentimiento_Guardar
+  @JugadorId int, @TutorNombre nvarchar(120), @Parentesco nvarchar(40), @Fecha date, @VigenteHasta date = NULL,
+  @PermiteReelPublico bit = 1, @PermiteContacto bit = 0, @Referencia nvarchar(200) = NULL, @_UsuarioId int
+AS
+BEGIN
+  SET NOCOUNT ON;
+  SET @TutorNombre = LTRIM(RTRIM(@TutorNombre)); SET @Parentesco = LTRIM(RTRIM(@Parentesco));
+  IF NOT EXISTS (SELECT 1 FROM fut.Jugador WHERE JugadorId = @JugadorId) THROW 50404, N'Jugador no encontrado', 1;
+  IF @TutorNombre = '' OR @Parentesco = '' THROW 50400, N'Indica el nombre del tutor y su parentesco', 1;
+  IF @Fecha > CAST(SYSUTCDATETIME() AS date) THROW 50400, N'La fecha de firma no puede ser futura', 1;
+  IF @VigenteHasta < @Fecha THROW 50400, N'La vigencia no puede terminar antes de la firma', 1;
+  IF @PermiteReelPublico = 0 AND @PermiteContacto = 0 THROW 50400, N'El consentimiento debe autorizar al menos una cosa', 1;
+  INSERT fut.Consentimiento(JugadorId, TutorNombre, Parentesco, Fecha, VigenteHasta, PermiteReelPublico, PermiteContacto, Referencia, RegistradoPor)
+  VALUES (@JugadorId, @TutorNombre, @Parentesco, @Fecha, @VigenteHasta, @PermiteReelPublico, @PermiteContacto, NULLIF(LTRIM(RTRIM(@Referencia)), ''), @_UsuarioId);
+  SELECT ConsentimientoId = CAST(SCOPE_IDENTITY() AS int);
+END
+GO
+
+-- Revocar surte efecto de inmediato: los enlaces dejan de abrir porque el permiso se comprueba en cada visita.
+CREATE OR ALTER PROCEDURE api.usp_Consentimiento_Revocar @ConsentimientoId int
+AS
+BEGIN
+  SET NOCOUNT ON;
+  UPDATE fut.Consentimiento SET RevocadoEn = SYSUTCDATETIME() WHERE ConsentimientoId = @ConsentimientoId AND RevocadoEn IS NULL;
+  IF @@ROWCOUNT = 0 THROW 50404, N'Consentimiento no encontrado o ya revocado', 1;
+  SELECT Revocado = CAST(1 AS bit);
+END
+GO
+
+/* ---------- enlaces para visores ---------- */
+-- Devuelve el reel que abre un token, o NULL: el enlace debe estar vigente, el reel renderizado y el permiso en pie.
+CREATE OR ALTER FUNCTION hl.fn_EnlaceReel(@Token varchar(40)) RETURNS int
+AS BEGIN
+  RETURN (SELECT r.ReelId FROM hl.ReelEnlace e JOIN hl.Reel r ON r.ReelId = e.ReelId
+          WHERE e.Token = @Token AND e.RevocadoEn IS NULL AND e.ExpiraEn > SYSUTCDATETIME()
+            AND r.Estado = 'LISTO' AND fut.fn_Permiso(r.JugadorId, 'REEL') = 1)
+END
+GO
+
+CREATE OR ALTER PROCEDURE api.usp_Reel_EnlaceCrear @ReelId int, @Destinatario nvarchar(120), @Dias int = NULL, @_UsuarioId int
+AS
+BEGIN
+  SET NOCOUNT ON;
+  DECLARE @estado varchar(10), @jug int;
+  SELECT @estado = Estado, @jug = JugadorId FROM hl.Reel WHERE ReelId = @ReelId;
+  IF @estado IS NULL THROW 50404, N'Reel no encontrado', 1;
+  SET @Destinatario = LTRIM(RTRIM(@Destinatario));
+  IF @Destinatario = '' THROW 50400, N'Indica a quién le vas a dar el enlace (visor, club o universidad)', 1;
+  IF @estado <> 'LISTO' THROW 50409, N'Renderiza el reel antes de compartirlo', 1;
+  IF fut.fn_Permiso(@jug, 'REEL') = 0
+    THROW 50409, N'El jugador es menor de edad (o no tiene fecha de nacimiento) y no hay consentimiento vigente del tutor para compartir su reel. Regístralo en su ficha.', 1;
+  SET @Dias = ISNULL(@Dias, CAST(cat.fn_Param('ENLACE_DIAS') AS int));
+  IF @Dias NOT BETWEEN 1 AND 180 THROW 50400, N'La vigencia del enlace va de 1 a 180 días', 1;
+  DECLARE @token varchar(40) = LOWER(CONVERT(varchar(40), CRYPT_GEN_RANDOM(16), 2));
+  INSERT hl.ReelEnlace(ReelId, Token, Destinatario, ExpiraEn, CreadoPor)
+  VALUES (@ReelId, @token, @Destinatario, DATEADD(day, @Dias, SYSUTCDATETIME()), @_UsuarioId);
+  SELECT EnlaceId = CAST(SCOPE_IDENTITY() AS int), Token = @token;
+END
+GO
+
+CREATE OR ALTER PROCEDURE api.usp_Reel_EnlaceRevocar @EnlaceId int
+AS
+BEGIN
+  SET NOCOUNT ON;
+  UPDATE hl.ReelEnlace SET RevocadoEn = SYSUTCDATETIME() WHERE EnlaceId = @EnlaceId AND RevocadoEn IS NULL;
+  IF @@ROWCOUNT = 0 THROW 50404, N'Enlace no encontrado o ya revocado', 1;
+  SELECT Revocado = CAST(1 AS bit);
+END
+GO
+
 /* Revisa el material de un jugador con ojos de visor y dice qué falta. */
 CREATE OR ALTER FUNCTION hl.fn_Diagnostico(@JugadorId int, @TemporadaId int)
 RETURNS @r TABLE (Orden int IDENTITY, Severidad varchar(5), Mensaje nvarchar(400))
 AS
 BEGIN
-  DECLARE @pos tinyint, @posNombre nvarchar(60), @linea varchar(12), @est smallint, @grad smallint,
-          @correo nvarchar(200), @tel nvarchar(40), @foto int, @pie char(1);
-  SELECT @pos = j.PosicionId, @posNombre = LOWER(p.Nombre), @linea = p.Linea, @est = j.EstaturaCm, @grad = j.AnioGraduacion,
-         @correo = j.CorreoContacto, @tel = j.TelefonoContacto, @foto = j.FotoMedioId, @pie = j.PieDominante
-  FROM fut.Jugador j JOIN cat.Posicion p ON p.PosicionId = j.PosicionId WHERE j.JugadorId = @JugadorId;
+  DECLARE @pos tinyint, @posNombre nvarchar(60), @linea varchar(12), @est smallint, @nac date,
+          @contactoClub bit, @foto int, @pie char(1);
+  SELECT @pos = j.PosicionId, @posNombre = LOWER(p.Nombre), @linea = p.Linea, @est = j.EstaturaCm, @nac = j.FechaNacimiento,
+         @contactoClub = CAST(IIF(e.ContactoCorreo IS NOT NULL OR e.ContactoTelefono IS NOT NULL, 1, 0) AS bit),
+         @foto = j.FotoMedioId, @pie = j.PieDominante
+  FROM fut.Jugador j JOIN cat.Posicion p ON p.PosicionId = j.PosicionId
+  LEFT JOIN fut.Equipo e ON e.EquipoId = j.EquipoId WHERE j.JugadorId = @JugadorId;
   IF @pos IS NULL RETURN;
 
   DECLARE @n int, @partidos int, @altos int, @debil int, @sinMarca int, @sinCalif int, @defensa int, @fallidas int;
@@ -36,7 +130,7 @@ BEGIN
     INSERT @r (Severidad, Mensaje)
     SELECT TOP 4 'MEDIA', CONCAT(N'Falta evidencia de «', te.Nombre, N'», de lo primero que se evalúa en un ', @posNombre, N'.')
     FROM cat.PesoPosicionEvento ppe JOIN cat.TipoEvento te ON te.TipoEventoId = ppe.TipoEventoId
-    WHERE ppe.PosicionId = @pos AND ppe.Multiplicador >= 1.40
+    WHERE ppe.PosicionId = @pos AND ppe.EsClave = 1
       AND NOT EXISTS (SELECT 1 FROM hl.vw_ClipPuntaje v WHERE v.JugadorId = @JugadorId AND v.TipoEventoId = ppe.TipoEventoId
                       AND v.Resultado = 'E' AND (@TemporadaId IS NULL OR v.TemporadaId = @TemporadaId))
     ORDER BY ppe.Multiplicador DESC, te.PesoBase DESC;
@@ -57,9 +151,13 @@ BEGIN
       INSERT @r VALUES ('INFO', CONCAT(@sinCalif, N' jugada(s) sin valoración técnica; se toman como 3 de 5 y pueden estar mal ordenadas.'));
   END
 
-  IF @correo IS NULL AND @tel IS NULL
-    INSERT @r VALUES ('ALTA', N'El perfil no tiene datos de contacto: aunque el reel guste, no habrá cómo llamar al jugador.');
-  DECLARE @faltan nvarchar(200) = CONCAT_WS(N', ', IIF(@est IS NULL, N'estatura', NULL), IIF(@grad IS NULL, N'año de graduación', NULL),
+  IF fut.fn_Permiso(@JugadorId, 'REEL') = 0
+    INSERT @r VALUES ('ALTA', IIF(@nac IS NULL,
+      N'Falta la fecha de nacimiento: sin ella se le trata como menor y su reel no se puede compartir sin consentimiento del tutor.',
+      N'Es menor de edad y no hay consentimiento vigente del tutor: su reel no se puede compartir fuera del club.'));
+  IF @contactoClub = 0
+    INSERT @r VALUES ('ALTA', N'Su equipo no tiene contacto para visores (coordinador o entrenador). Regístralo en Administración → Equipos: es el contacto que verán, no el del jugador.');
+  DECLARE @faltan nvarchar(200) = CONCAT_WS(N', ', IIF(@est IS NULL, N'estatura', NULL), IIF(@nac IS NULL, N'fecha de nacimiento', NULL),
                                             IIF(@foto IS NULL, N'foto de perfil', NULL));
   IF @faltan <> ''
     INSERT @r VALUES ('INFO', CONCAT(N'Completa el perfil (', @faltan, N'): son los datos de la tarjeta inicial del reel.'));
@@ -144,22 +242,38 @@ BEGIN
 END
 GO
 
-CREATE OR ALTER PROCEDURE hl.usp_Reel_Datos @ReelId int, @Publico bit
+CREATE OR ALTER PROCEDURE hl.usp_Reel_Datos @ReelId int, @Publico bit, @ExpiraEn datetime2(0) = NULL
 AS
 BEGIN
   SET NOCOUNT ON;
-  SELECT r.ReelId, r.Titulo, r.Estado, r.DuracionSeg, r.DuracionObjetivoSeg, r.ErrorProceso, r.CreadoEn, r.TemporadaId,
-         TokenPublico = IIF(@Publico = 1, NULL, r.TokenPublico),
-         j.JugadorId, Jugador = CONCAT(j.Nombre, ' ', j.Apellidos), j.Dorsal, Posicion = p.Nombre, PosicionSecundaria = p2.Nombre,
-         j.PieDominante, j.EstaturaCm, j.PesoKg, j.FechaNacimiento, j.AnioGraduacion, j.PromedioAcademico,
-         Equipo = e.Nombre, j.CorreoContacto, j.TelefonoContacto, j.Bio, j.FotoMedioId,
-         DuracionEstimada = (SELECT SUM(c.SegundoFin - c.SegundoInicio) FROM hl.ReelClip rc JOIN hl.Clip c ON c.ClipId = rc.ClipId WHERE rc.ReelId = r.ReelId)
-  FROM hl.Reel r
-  JOIN fut.Jugador j ON j.JugadorId = r.JugadorId
-  JOIN cat.Posicion p ON p.PosicionId = j.PosicionId
-  LEFT JOIN cat.Posicion p2 ON p2.PosicionId = j.PosicionSecundariaId
-  LEFT JOIN fut.Equipo e ON e.EquipoId = j.EquipoId
-  WHERE r.ReelId = @ReelId;
+  IF @Publico = 1
+    -- Lo que recibe un visor sin cuenta: solo año de nacimiento y, por defecto, el contacto del club.
+    -- El contacto personal o del tutor aparece únicamente si es mayor de edad o el tutor lo autorizó.
+    SELECT r.ReelId, r.Titulo, r.DuracionSeg, ExpiraEn = @ExpiraEn,
+           Jugador = CONCAT(j.Nombre, ' ', j.Apellidos), j.Dorsal, Posicion = p.Nombre, PosicionSecundaria = p2.Nombre,
+           j.PieDominante, j.EstaturaCm, j.PesoKg, AnioNacimiento = YEAR(j.FechaNacimiento), j.AnioGraduacion, j.PromedioAcademico,
+           Equipo = e.Nombre, j.Bio, j.FotoMedioId,
+           e.ContactoNombre, e.ContactoCargo, e.ContactoCorreo, e.ContactoTelefono,
+           CorreoPersonal   = IIF(pc.Permite = 1, j.CorreoContacto, NULL),
+           TelefonoPersonal = IIF(pc.Permite = 1, j.TelefonoContacto, NULL)
+    FROM hl.Reel r
+    JOIN fut.Jugador j ON j.JugadorId = r.JugadorId
+    JOIN cat.Posicion p ON p.PosicionId = j.PosicionId
+    LEFT JOIN cat.Posicion p2 ON p2.PosicionId = j.PosicionSecundariaId
+    LEFT JOIN fut.Equipo e ON e.EquipoId = j.EquipoId
+    CROSS APPLY (SELECT Permite = fut.fn_Permiso(j.JugadorId, 'CONTACTO')) pc
+    WHERE r.ReelId = @ReelId;
+  ELSE
+    SELECT r.ReelId, r.Titulo, r.Estado, r.DuracionSeg, r.DuracionObjetivoSeg, r.ErrorProceso, r.CreadoEn, r.TemporadaId,
+           j.JugadorId, Jugador = CONCAT(j.Nombre, ' ', j.Apellidos), j.Dorsal, Posicion = p.Nombre, PosicionSecundaria = p2.Nombre,
+           Equipo = e.Nombre, EsMenor = fut.fn_EsMenor(j.JugadorId), PuedeCompartir = fut.fn_Permiso(j.JugadorId, 'REEL'),
+           DuracionEstimada = (SELECT SUM(c.SegundoFin - c.SegundoInicio) FROM hl.ReelClip rc JOIN hl.Clip c ON c.ClipId = rc.ClipId WHERE rc.ReelId = r.ReelId)
+    FROM hl.Reel r
+    JOIN fut.Jugador j ON j.JugadorId = r.JugadorId
+    JOIN cat.Posicion p ON p.PosicionId = j.PosicionId
+    LEFT JOIN cat.Posicion p2 ON p2.PosicionId = j.PosicionSecundariaId
+    LEFT JOIN fut.Equipo e ON e.EquipoId = j.EquipoId
+    WHERE r.ReelId = @ReelId;
 
   SELECT rc.Orden, rc.ClipId, MedioId = IIF(@Publico = 1, NULL, v.MedioId), v.TipoEvento, v.Categoria,
          v.SegundoInicio, v.SegundoFin, v.DuracionSeg, v.Minuto, v.Rival, v.NivelRival, v.FechaPartido,
@@ -199,6 +313,11 @@ BEGIN
     UNION ALL
     SELECT 2, Orden, Severidad, Mensaje FROM hl.fn_Diagnostico(@jug, @temp)) d
   ORDER BY Bloque, Orden;
+
+  -- enlaces entregados: a quién, hasta cuándo y cuántas veces se abrió
+  SELECT e.EnlaceId, e.Token, e.Destinatario, e.ExpiraEn, e.RevocadoEn, e.Vistas, e.UltimaVistaEn, e.CreadoEn,
+         Estado = CASE WHEN e.RevocadoEn IS NOT NULL THEN 'REVOCADO' WHEN e.ExpiraEn <= SYSUTCDATETIME() THEN 'VENCIDO' ELSE 'VIGENTE' END
+  FROM hl.ReelEnlace e WHERE e.ReelId = @ReelId ORDER BY e.CreadoEn DESC, e.EnlaceId DESC;
 END
 GO
 
@@ -211,14 +330,15 @@ BEGIN
 END
 GO
 
-/* Lo que ve un visor con el enlace compartido: sin sesión, solo reels publicados. */
+/* Lo que ve un visor con su enlace: sin sesión. Cada apertura queda contada en el enlace. */
 CREATE OR ALTER PROCEDURE api.usp_Reel_Publico @Token varchar(40)
 AS
 BEGIN
   SET NOCOUNT ON;
-  DECLARE @id int = (SELECT ReelId FROM hl.Reel WHERE TokenPublico = @Token AND Estado = 'LISTO');
-  IF @id IS NULL OR @Token IS NULL THROW 50404, N'Este enlace no existe o ya no está disponible', 1;
-  EXEC hl.usp_Reel_Datos @id, 1;
+  DECLARE @id int = hl.fn_EnlaceReel(@Token), @expira datetime2(0);
+  IF @id IS NULL THROW 50404, N'Este enlace no existe, venció o fue retirado. Pide uno nuevo al club.', 1;
+  UPDATE hl.ReelEnlace SET Vistas += 1, UltimaVistaEn = SYSUTCDATETIME(), @expira = ExpiraEn WHERE Token = @Token;
+  EXEC hl.usp_Reel_Datos @id, 1, @expira;
 END
 GO
 
@@ -227,7 +347,7 @@ AS
 BEGIN
   SET NOCOUNT ON;
   SELECT r.ReelId, r.Titulo, r.Estado, r.DuracionSeg, r.CreadoEn, r.JugadorId, Jugador = CONCAT(j.Nombre, ' ', j.Apellidos),
-         Posicion = p.Nombre, Publicado = CAST(IIF(r.TokenPublico IS NULL, 0, 1) AS bit),
+         Posicion = p.Nombre, Publicado = CAST(IIF(EXISTS (SELECT 1 FROM hl.ReelEnlace e WHERE e.ReelId = r.ReelId AND e.RevocadoEn IS NULL AND e.ExpiraEn > SYSUTCDATETIME()), 1, 0) AS bit),
          Clips = (SELECT COUNT(*) FROM hl.ReelClip rc WHERE rc.ReelId = r.ReelId)
   FROM hl.Reel r JOIN fut.Jugador j ON j.JugadorId = r.JugadorId JOIN cat.Posicion p ON p.PosicionId = j.PosicionId
   WHERE @JugadorId IS NULL OR r.JugadorId = @JugadorId
@@ -285,24 +405,6 @@ BEGIN
 END
 GO
 
-CREATE OR ALTER PROCEDURE api.usp_Reel_Publicar @ReelId int, @Publicar bit = 1
-AS
-BEGIN
-  SET NOCOUNT ON;
-  DECLARE @estado varchar(10), @token varchar(40);
-  SELECT @estado = Estado, @token = TokenPublico FROM hl.Reel WHERE ReelId = @ReelId;
-  IF @estado IS NULL THROW 50404, N'Reel no encontrado', 1;
-  IF @Publicar = 1
-  BEGIN
-    IF @estado <> 'LISTO' THROW 50409, N'Renderiza el reel antes de compartirlo', 1;
-    IF @token IS NULL SET @token = LOWER(CONVERT(varchar(40), CRYPT_GEN_RANDOM(16), 2));
-  END
-  ELSE SET @token = NULL;
-  UPDATE hl.Reel SET TokenPublico = @token WHERE ReelId = @ReelId;
-  SELECT ReelId = @ReelId, TokenPublico = @token;
-END
-GO
-
 CREATE OR ALTER PROCEDURE api.usp_Reel_Eliminar @ReelId int
 AS
 BEGIN
@@ -323,7 +425,9 @@ BEGIN
 
   SELECT j.JugadorId, j.Nombre, j.Apellidos, j.FechaNacimiento, j.PosicionId, Posicion = p.Nombre, j.PosicionSecundariaId,
          PosicionSecundaria = p2.Nombre, j.PieDominante, j.EstaturaCm, j.PesoKg, j.Dorsal, j.EquipoId, Equipo = e.Nombre,
-         j.AnioGraduacion, j.PromedioAcademico, j.CorreoContacto, j.TelefonoContacto, j.Bio, j.FotoMedioId, j.Activo
+         j.AnioGraduacion, j.PromedioAcademico, j.CorreoContacto, j.TelefonoContacto, j.Bio, j.FotoMedioId, j.Activo,
+         EsMenor = fut.fn_EsMenor(j.JugadorId), PuedeCompartir = fut.fn_Permiso(j.JugadorId, 'REEL'),
+         ContactoClub = CONCAT_WS(N' · ', e.ContactoNombre, e.ContactoCargo, e.ContactoCorreo, e.ContactoTelefono)
   FROM fut.Jugador j JOIN cat.Posicion p ON p.PosicionId = j.PosicionId
   LEFT JOIN cat.Posicion p2 ON p2.PosicionId = j.PosicionSecundariaId
   LEFT JOIN fut.Equipo e ON e.EquipoId = j.EquipoId
@@ -331,14 +435,14 @@ BEGIN
 
   -- cobertura: lo que tiene y lo que la posición exige
   SELECT te.TipoEventoId, te.Nombre, te.Categoria, Multiplicador = ISNULL(ppe.Multiplicador, 1.00),
-         EsClave = CAST(IIF(ISNULL(ppe.Multiplicador, 1) >= 1.40, 1, 0) AS bit),
+         EsClave = ISNULL(ppe.EsClave, CAST(0 AS bit)),
          Jugadas = COUNT(v.ClipId), MejorPuntaje = MAX(v.PuntajeReclutamiento), Promedio = CAST(AVG(v.PuntajeReclutamiento) AS decimal(6,2))
   FROM cat.TipoEvento te
   LEFT JOIN cat.PesoPosicionEvento ppe ON ppe.TipoEventoId = te.TipoEventoId AND ppe.PosicionId = @pos
   LEFT JOIN hl.vw_ClipPuntaje v ON v.TipoEventoId = te.TipoEventoId AND v.JugadorId = @JugadorId
         AND (@TemporadaId IS NULL OR v.TemporadaId = @TemporadaId)
-  GROUP BY te.TipoEventoId, te.Nombre, te.Categoria, ppe.Multiplicador
-  HAVING COUNT(v.ClipId) > 0 OR ISNULL(ppe.Multiplicador, 1) >= 1.40
+  GROUP BY te.TipoEventoId, te.Nombre, te.Categoria, ppe.Multiplicador, ppe.EsClave
+  HAVING COUNT(v.ClipId) > 0 OR ISNULL(ppe.EsClave, 0) = 1
   ORDER BY ISNULL(ppe.Multiplicador, 1) DESC, COUNT(v.ClipId) DESC;
 
   SELECT TOP 30 v.ClipId, v.MedioId, v.TipoEvento, v.Categoria, v.SegundoInicio, v.SegundoFin, v.SegundoEvento, v.Minuto, v.Rival,
@@ -357,8 +461,15 @@ BEGIN
     AND (@TemporadaId IS NULL OR m.TemporadaId = @TemporadaId)
   ORDER BY m.CreadoEn DESC;
 
-  SELECT r.ReelId, r.Titulo, r.Estado, r.DuracionSeg, r.CreadoEn, Publicado = CAST(IIF(r.TokenPublico IS NULL, 0, 1) AS bit),
+  SELECT r.ReelId, r.Titulo, r.Estado, r.DuracionSeg, r.CreadoEn, Publicado = CAST(IIF(EXISTS (SELECT 1 FROM hl.ReelEnlace e WHERE e.ReelId = r.ReelId AND e.RevocadoEn IS NULL AND e.ExpiraEn > SYSUTCDATETIME()), 1, 0) AS bit),
          Clips = (SELECT COUNT(*) FROM hl.ReelClip rc WHERE rc.ReelId = r.ReelId)
   FROM hl.Reel r WHERE r.JugadorId = @JugadorId ORDER BY r.CreadoEn DESC, r.ReelId DESC;
+
+  SELECT c.ConsentimientoId, c.TutorNombre, c.Parentesco, c.Fecha, c.VigenteHasta, c.PermiteReelPublico, c.PermiteContacto,
+         c.Referencia, c.RevocadoEn, RegistradoPor = u.Nombre,
+         Estado = CASE WHEN c.RevocadoEn IS NOT NULL THEN 'REVOCADO'
+                       WHEN c.VigenteHasta < CAST(SYSUTCDATETIME() AS date) THEN 'VENCIDO' ELSE 'VIGENTE' END
+  FROM fut.Consentimiento c JOIN seg.Usuario u ON u.UsuarioId = c.RegistradoPor
+  WHERE c.JugadorId = @JugadorId ORDER BY c.CreadoEn DESC, c.ConsentimientoId DESC;
 END
 GO

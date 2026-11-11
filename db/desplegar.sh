@@ -26,7 +26,7 @@ IF DATABASE_PRINCIPAL_ID('soccer_app') IS NULL CREATE USER soccer_app FOR LOGIN 
 GO
 SQL
 
-for f in 0*.sql; do
+for f in [0-9][0-9]_*.sql; do
   echo "· $f"
   correr -d "$SQL_DB" < "$f"
 done

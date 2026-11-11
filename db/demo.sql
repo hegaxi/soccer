@@ -9,6 +9,8 @@ INSERT fut.Equipo(Nombre, Categoria, EsPropio) VALUES
  (N'Halcones FC', N'Sub-17', 1), (N'Atlético Norte', N'Sub-17', 0), (N'Real Cantera', N'Sub-17', 0),
  (N'Deportivo Sur', N'Sub-17', 0), (N'Academia Élite', N'Sub-17', 0);
 DECLARE @h int = (SELECT EquipoId FROM fut.Equipo WHERE Nombre = N'Halcones FC');
+UPDATE fut.Equipo SET ContactoNombre = N'Coordinación de visorías', ContactoCargo = N'Coordinador deportivo',
+       ContactoCorreo = N'visorias@halconesfc.example.com', ContactoTelefono = N'+52 55 5550 0100' WHERE EquipoId = @h;
 
 INSERT fut.Partido(TemporadaId, Fecha, Jornada, Competencia, Fase, EquipoLocalId, EquipoVisitaId, GolesLocal, GolesVisita, NivelRival)
 SELECT @t, v.Fecha, v.Jornada, v.Comp, v.Fase, IIF(v.Local = 1, @h, e.EquipoId), IIF(v.Local = 1, e.EquipoId, @h), v.GL, v.GV, v.Nivel

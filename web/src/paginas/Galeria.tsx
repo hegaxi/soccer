@@ -112,7 +112,7 @@ function VisorFoto({ foto, jugadores, cerrar, cambio }: { foto: any; jugadores: 
   };
   const perfil = async (jugadorId: number) => {
     const [[j]] = await exec('jugador.obtener', { jugadorId });
-    const { posicion, posicionSecundaria, equipo, ...datos } = j;
+    const { posicion, posicionSecundaria, equipo, esMenor, puedeCompartir, contactoClub, ...datos } = j;
     await exec('jugador.guardar', { ...datos, fotoMedioId: foto.medioId });
   };
   return (

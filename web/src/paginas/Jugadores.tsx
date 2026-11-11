@@ -14,8 +14,8 @@ export function camposJugador(cat: any): Campo[] {
     { n: 'dorsal', e: 'Dorsal', t: 'number' }, { n: 'fechaNacimiento', e: 'Fecha de nacimiento', t: 'date' },
     { n: 'estaturaCm', e: 'Estatura (cm)', t: 'number' }, { n: 'pesoKg', e: 'Peso (kg)', t: 'number' },
     { n: 'equipoId', e: 'Equipo', t: 'select', op: cat.equipos.map((e: any) => ({ v: e.equipoId, e: e.nombre })) },
-    { n: 'anioGraduacion', e: 'Año de graduación', t: 'number' }, { n: 'promedioAcademico', e: 'Promedio académico', t: 'number', paso: '0.01' },
-    { n: 'correoContacto', e: 'Correo de contacto', t: 'email' }, { n: 'telefonoContacto', e: 'Teléfono de contacto' },
+    { n: 'anioGraduacion', e: 'Año de graduación (Class of)', t: 'number', ayuda: 'Solo para reclutamiento universitario' }, { n: 'promedioAcademico', e: 'Promedio académico', t: 'number', paso: '0.01' },
+    { n: 'correoContacto', e: 'Correo del jugador o tutor', t: 'email', ayuda: 'A los visores se les muestra el contacto del club; este solo con autorización' }, { n: 'telefonoContacto', e: 'Teléfono del jugador o tutor' },
     { n: 'bio', e: 'Descripción para visores', t: 'area' }, { n: 'activo', e: 'Activo en el plantel', t: 'check' },
   ];
 }
@@ -43,7 +43,7 @@ export function Jugadores() {
           <Link key={j.jugadorId} to={`/jugadores/${j.jugadorId}`} className="tarjeta fila" style={{ flexWrap: 'nowrap' }}>
             <Avatar j={j} chico />
             <div className="crece"><b>{j.nombre} {j.apellidos}</b>
-              <div className="tenue chico">{j.dorsal ? `#${j.dorsal} · ` : ''}{j.posicion}{j.anioGraduacion ? ` · Gen. ${j.anioGraduacion}` : ''}</div>
+              <div className="tenue chico">{j.dorsal ? `#${j.dorsal} · ` : ''}{j.posicion}{j.anioNacimiento ? ` · Cat. ${j.anioNacimiento}` : ''}</div>
               <div className="fila" style={{ gap: 5, marginTop: 4 }}><span className={'etq ' + (j.clips >= 12 ? 'verde' : j.clips > 0 ? 'ambar' : '')}>{j.clips} jugadas</span>{j.reels > 0 && <span className="etq azul">{j.reels} reel(s)</span>}</div></div>
           </Link>
         ))}
@@ -61,10 +61,10 @@ export function JugadorFicha() {
   const ir = useNavigate();
   const [soloTemporada, setSoloTemporada] = useState(true);
   const [editar, setEditar] = useState(false); const [clip, setClip] = useState<any>(null); const [foto, setFoto] = useState<any>(null);
-  const [duracion, setDuracion] = useState(240); const [error, setError] = useState('');
+  const [duracion, setDuracion] = useState(240); const [error, setError] = useState(''); const [consentir, setConsentir] = useState(false);
   const { datos, error: errCarga, recargar } = useCarga(async () => {
-    const [[j], cobertura, clips, diagnostico, fotos, reels] = await exec('jugador.obtener', { jugadorId, temporadaId: soloTemporada ? temporadaId : null });
-    return { j, cobertura, clips, diagnostico, fotos, reels };
+    const [[j], cobertura, clips, diagnostico, fotos, reels, consentimientos] = await exec('jugador.obtener', { jugadorId, temporadaId: soloTemporada ? temporadaId : null });
+    return { j, cobertura, clips, diagnostico, fotos, reels, consentimientos };
   }, [jugadorId, temporadaId, soloTemporada]);
 
   if (errCarga) return <div className="centro">{errCarga}</div>;
@@ -73,7 +73,7 @@ export function JugadorFicha() {
   const edad = j.fechaNacimiento ? Math.floor((Date.now() - new Date(j.fechaNacimiento).getTime()) / 31557600000) : null;
   const generar = () => exec('reel.generar', { jugadorId, temporadaId: soloTemporada ? temporadaId : null, duracionObjetivoSeg: duracion })
     .then(([[r]]) => ir(`/reels/${r.reelId}`)).catch(e => setError(e.message));
-  const { posicion, posicionSecundaria, equipo, ...editable } = j;
+  const { posicion, posicionSecundaria, equipo, esMenor, puedeCompartir, contactoClub, ...editable } = j;
 
   return (
     <div className="col">
@@ -83,8 +83,8 @@ export function JugadorFicha() {
           <h1>{j.nombre} {j.apellidos} {j.dorsal && <span className="tenue">#{j.dorsal}</span>}</h1>
           <div>{j.posicion}{j.posicionSecundaria && ` / ${j.posicionSecundaria}`}{j.equipo && ` · ${j.equipo}`}</div>
           <div className="tenue">{[edad && `${edad} años`, j.estaturaCm && `${(j.estaturaCm / 100).toFixed(2)} m`, j.pesoKg && `${j.pesoKg} kg`, `Pie ${PIES[j.pieDominante].toLowerCase()}`,
-            j.anioGraduacion && `Generación ${j.anioGraduacion}`, j.promedioAcademico && `Promedio ${j.promedioAcademico}`].filter(Boolean).join(' · ')}</div>
-          <div className="tenue">{[j.correoContacto, j.telefonoContacto].filter(Boolean).join(' · ') || 'Sin datos de contacto'}</div>
+            j.fechaNacimiento && `Categoría ${j.fechaNacimiento.slice(0, 4)}`, j.anioGraduacion && `Class of ${j.anioGraduacion}`, j.promedioAcademico && `Promedio ${j.promedioAcademico}`].filter(Boolean).join(' · ')}</div>
+          <div className="tenue">Contacto para visores: {j.contactoClub || 'el equipo no tiene contacto registrado'}</div>
           {j.bio && <p style={{ margin: '8px 0 0' }}>{j.bio}</p>}
         </div>
         <div className="col" style={{ alignItems: 'flex-end' }}>
@@ -133,6 +133,23 @@ export function JugadorFicha() {
             {error && <div className="aviso error">{error}</div>}
           </div>
           <div><h3>Diagnóstico del material</h3><Observaciones lista={datos.diagnostico} /></div>
+          {(j.esMenor || datos.consentimientos.length > 0) && (
+            <div className="tarjeta col">
+              <div className="fila entre"><h3 style={{ margin: 0 }}>Consentimiento del tutor</h3>
+                <span className={'etq ' + (j.puedeCompartir ? 'verde' : 'rojo')}>{j.puedeCompartir ? 'Se puede compartir' : 'No se puede compartir'}</span></div>
+              {datos.consentimientos.length === 0 && <span className="tenue chico">Sin la autorización firmada de madre, padre o tutor, el reel de un menor no sale del club.</span>}
+              <div className="lista">
+                {datos.consentimientos.map(c => (
+                  <div key={c.consentimientoId} className="item">
+                    <div className="crece"><b>{c.tutorNombre}</b> <span className="tenue">· {c.parentesco}</span> <span className={'etq ' + (c.estado === 'VIGENTE' ? 'verde' : 'rojo')}>{c.estado === 'VIGENTE' ? 'Vigente' : c.estado === 'VENCIDO' ? 'Vencido' : 'Revocado'}</span>
+                      <div className="chico tenue">Firmó el {fecha(c.fecha)}{c.vigenteHasta && ` · vigente hasta el ${fecha(c.vigenteHasta)}`} · autoriza: {[c.permiteReelPublico && 'compartir el reel', c.permiteContacto && 'mostrar su contacto'].filter(Boolean).join(' y ')}{c.referencia && ` · ${c.referencia}`}</div></div>
+                    {esEditor && c.estado === 'VIGENTE' && <button className="btn peligro mini" onClick={() => confirm('¿Revocar este consentimiento? Los enlaces del jugador dejarán de abrir de inmediato.') && exec('consentimiento.revocar', { consentimientoId: c.consentimientoId }).then(recargar)}>Revocar</button>}
+                  </div>
+                ))}
+              </div>
+              {esEditor && <button className="btn sec" onClick={() => setConsentir(true)}>Registrar consentimiento</button>}
+            </div>
+          )}
           <div>
             <h3>Cobertura para la posición</h3>
             <table><thead><tr><th>Jugada</th><th>Peso</th><th className="der">Jugadas</th><th className="der">Mejor</th></tr></thead>
@@ -147,6 +164,15 @@ export function JugadorFicha() {
       {editar && <Modal titulo="Editar perfil" cerrar={() => setEditar(false)}>
         <Formulario campos={camposJugador(cat)} inicial={{ ...editable, fechaNacimiento: j.fechaNacimiento ?? '' }} cancelar={() => setEditar(false)}
           guardar={async v => { await exec('jugador.guardar', v); setEditar(false); recargar(); }} /></Modal>}
+      {consentir && <Modal titulo="Consentimiento del tutor" cerrar={() => setConsentir(false)}>
+        <p className="tenue" style={{ marginTop: 0 }}>Registra aquí la autorización que el tutor firmó en papel o por escrito. Queda guardado quién la registró y cuándo.</p>
+        <Formulario cancelar={() => setConsentir(false)} texto="Registrar"
+          campos={[{ n: 'tutorNombre', e: 'Nombre del tutor', req: true }, { n: 'parentesco', e: 'Parentesco', req: true, t: 'select', op: ['Madre', 'Padre', 'Tutor legal'].map(x => ({ v: x, e: x })) },
+            { n: 'fecha', e: 'Fecha de firma', t: 'date', req: true }, { n: 'vigenteHasta', e: 'Vigente hasta (opcional)', t: 'date' },
+            { n: 'referencia', e: 'Dónde está el documento', ancho: true, ayuda: 'Folio, carpeta o archivo donde se guarda la autorización firmada' },
+            { n: 'permiteReelPublico', e: 'Autoriza compartir el reel con visores', t: 'check' }, { n: 'permiteContacto', e: 'Autoriza mostrar su contacto a los visores', t: 'check' }]}
+          inicial={{ tutorNombre: '', parentesco: 'Madre', fecha: new Date().toISOString().slice(0, 10), vigenteHasta: '', referencia: '', permiteReelPublico: true, permiteContacto: false }}
+          guardar={async v => { await exec('consentimiento.guardar', { jugadorId, ...v }); setConsentir(false); recargar(); }} /></Modal>}
       {clip && <Modal titulo={`${clip.tipoEvento}${clip.rival ? ` · vs ${clip.rival}` : ''}`} cerrar={() => { setClip(null); recargar(); }} grande>
         <ClipPlayer clip={clip} />
         <div className="fila" style={{ marginTop: 8 }}><Link className="btn sec mini" to={`/medio/${clip.medioId}`}>Abrir el video completo</Link></div></Modal>}

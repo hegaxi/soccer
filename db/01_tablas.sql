@@ -263,11 +263,8 @@ CREATE TABLE hl.Reel(
   RutaVideo          varchar(300) NULL,
   DuracionSeg        decimal(9,2) NULL,
   ErrorProceso       nvarchar(500) NULL,
-  TokenPublico       varchar(40) NULL,
   CreadoPor          int NOT NULL CONSTRAINT FK_Reel_Usuario REFERENCES seg.Usuario,
   CreadoEn           datetime2(0) NOT NULL CONSTRAINT DF_Reel_Creado DEFAULT SYSUTCDATETIME());
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='UX_Reel_Token')
-  CREATE UNIQUE INDEX UX_Reel_Token ON hl.Reel(TokenPublico) WHERE TokenPublico IS NOT NULL;
 
 IF OBJECT_ID('hl.ReelClip') IS NULL
 CREATE TABLE hl.ReelClip(
@@ -295,4 +292,52 @@ CREATE TABLE med.Trabajo(
   CreadoEn   datetime2(0) NOT NULL CONSTRAINT DF_Trabajo_Creado DEFAULT SYSUTCDATETIME());
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_Trabajo_Cola')
   CREATE INDEX IX_Trabajo_Cola ON med.Trabajo(Estado, TrabajoId);
+GO
+
+/* ---------- visorías: contacto del club, consentimiento de tutores y enlaces por destinatario ---------- */
+IF OBJECT_ID('meta.Migracion') IS NULL
+CREATE TABLE meta.Migracion(
+  Clave      varchar(80) NOT NULL CONSTRAINT PK_Migracion PRIMARY KEY,
+  AplicadaEn datetime2(0) NOT NULL CONSTRAINT DF_Migracion_En DEFAULT SYSUTCDATETIME());
+
+-- A los visores se les da el contacto del club (coordinador), no el de un menor
+IF COL_LENGTH('fut.Equipo', 'ContactoNombre') IS NULL
+  ALTER TABLE fut.Equipo ADD ContactoNombre nvarchar(120) NULL, ContactoCargo nvarchar(80) NULL,
+                             ContactoCorreo nvarchar(200) NULL, ContactoTelefono nvarchar(40) NULL;
+
+-- "Clave" (lo que el diagnóstico exige ver en la posición) ya no depende del valor del multiplicador
+IF COL_LENGTH('cat.PesoPosicionEvento', 'EsClave') IS NULL
+  ALTER TABLE cat.PesoPosicionEvento ADD EsClave bit NOT NULL CONSTRAINT DF_PPE_Clave DEFAULT 0;
+
+/* Autorización del padre, madre o tutor. No se edita: si cambia, se revoca y se registra una nueva. */
+IF OBJECT_ID('fut.Consentimiento') IS NULL
+CREATE TABLE fut.Consentimiento(
+  ConsentimientoId   int IDENTITY CONSTRAINT PK_Consentimiento PRIMARY KEY,
+  JugadorId          int NOT NULL CONSTRAINT FK_Cons_Jugador REFERENCES fut.Jugador,
+  TutorNombre        nvarchar(120) NOT NULL,
+  Parentesco         nvarchar(40) NOT NULL,
+  Fecha              date NOT NULL,                 -- cuándo firmó
+  VigenteHasta       date NULL,
+  PermiteReelPublico bit NOT NULL,                  -- compartir el reel con visores fuera del club
+  PermiteContacto    bit NOT NULL,                  -- mostrar a los visores el contacto personal/del tutor
+  Referencia         nvarchar(200) NULL,            -- folio o ubicación del documento firmado
+  RevocadoEn         datetime2(0) NULL,
+  RegistradoPor      int NOT NULL CONSTRAINT FK_Cons_Usuario REFERENCES seg.Usuario,
+  CreadoEn           datetime2(0) NOT NULL CONSTRAINT DF_Cons_Creado DEFAULT SYSUTCDATETIME());
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_Cons_Jugador')
+  CREATE INDEX IX_Cons_Jugador ON fut.Consentimiento(JugadorId);
+
+/* Un enlace por destinatario: se sabe a quién se le dio, caduca y se puede revocar sin afectar a los demás. */
+IF OBJECT_ID('hl.ReelEnlace') IS NULL
+CREATE TABLE hl.ReelEnlace(
+  EnlaceId      int IDENTITY CONSTRAINT PK_ReelEnlace PRIMARY KEY,
+  ReelId        int NOT NULL CONSTRAINT FK_Enlace_Reel REFERENCES hl.Reel ON DELETE CASCADE,
+  Token         varchar(40) NOT NULL CONSTRAINT UQ_Enlace_Token UNIQUE,
+  Destinatario  nvarchar(120) NOT NULL,
+  ExpiraEn      datetime2(0) NOT NULL,
+  RevocadoEn    datetime2(0) NULL,
+  Vistas        int NOT NULL CONSTRAINT DF_Enlace_Vistas DEFAULT 0,
+  UltimaVistaEn datetime2(0) NULL,
+  CreadoPor     int NOT NULL CONSTRAINT FK_Enlace_Usuario REFERENCES seg.Usuario,
+  CreadoEn      datetime2(0) NOT NULL CONSTRAINT DF_Enlace_Creado DEFAULT SYSUTCDATETIME());
 GO

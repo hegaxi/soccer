@@ -46,13 +46,13 @@ MERGE cat.TipoEvento t USING (VALUES
 ) s(TipoEventoId,Clave,Nombre,Categoria,PesoBase,PreRollSeg,PostRollSeg) ON t.TipoEventoId=s.TipoEventoId
 WHEN NOT MATCHED THEN INSERT VALUES (s.TipoEventoId,s.Clave,s.Nombre,s.Categoria,s.PesoBase,s.PreRollSeg,s.PostRollSeg);
 
-/* Multiplicadores por posición. >= 1.40 = jugada "clave" que un reclutador espera ver en esa posición.
-   Lo no listado vale 1.00. */
+/* Multiplicadores por posición. Lo no listado vale 1.00. Al sembrar, las de 1.40 o más quedan marcadas
+   como "clave" (EsClave): lo que un visor espera ver en esa posición. Después EsClave se ajusta aparte. */
 MERGE cat.PesoPosicionEvento t USING (
-  SELECT p.PosicionId, e.TipoEventoId, v.Mult
+  SELECT p.PosicionId, e.TipoEventoId, v.Mult, EsClave = CAST(IIF(v.Mult >= 1.40, 1, 0) AS bit)
   FROM (VALUES
-   ('POR','ATAJADA',1.50),('POR','ATAJADA_1V1',1.60),('POR','PENAL_ATAJADO',1.40),('POR','SALIDA_AEREA',1.50),
-   ('POR','JUEGO_PIES',1.50),('POR','SAQUE',1.30),('POR','PASE_LARGO',1.20),('POR','GOL',0.60),
+   ('POR','ATAJADA',1.50),('POR','ATAJADA_1V1',1.60),('POR','PENAL_ATAJADO',1.10),('POR','SALIDA_AEREA',1.50),
+   ('POR','JUEGO_PIES',1.50),('POR','SAQUE',1.40),('POR','PASE_LARGO',1.20),('POR','GOL',0.60),
    ('DFC','DUELO_1V1_DEF',1.60),('DFC','DUELO_AEREO',1.50),('DFC','INTERCEPCION',1.50),('DFC','ENTRADA',1.40),
    ('DFC','COBERTURA',1.40),('DFC','SALIDA_BALON',1.50),('DFC','PASE_LARGO',1.30),('DFC','DESPEJE',1.20),('DFC','GOL',0.80),
    ('LAT','DUELO_1V1_DEF',1.50),('LAT','CENTRO',1.50),('LAT','CONDUCCION',1.30),('LAT','RECUPERACION',1.30),
@@ -70,7 +70,7 @@ MERGE cat.PesoPosicionEvento t USING (
   ) v(Pos,Ev,Mult)
   JOIN cat.Posicion p ON p.Clave=v.Pos JOIN cat.TipoEvento e ON e.Clave=v.Ev
 ) s ON t.PosicionId=s.PosicionId AND t.TipoEventoId=s.TipoEventoId
-WHEN NOT MATCHED THEN INSERT VALUES (s.PosicionId,s.TipoEventoId,s.Mult);
+WHEN NOT MATCHED THEN INSERT (PosicionId, TipoEventoId, Multiplicador, EsClave) VALUES (s.PosicionId,s.TipoEventoId,s.Mult,s.EsClave);
 
 MERGE cat.FasePartido t USING (VALUES
  ('AMISTOSO',N'Amistoso',0.85,1),('LIGA',N'Liga regular',1.00,2),('SHOWCASE',N'Torneo / showcase',1.10,3),
@@ -91,9 +91,10 @@ MERGE cat.Parametro t USING (VALUES
  ('PESO_GEN_TECNICO',        0.55,  N'Ranking general: peso del valor técnico'),
  ('PESO_GEN_INTERACCION',    0.35,  N'Ranking general: peso de la interacción de usuarios'),
  ('PESO_GEN_AUDIO',          0.10,  N'Ranking general: peso del pico de audio'),
- ('PESO_REC_TECNICO',        0.85,  N'Ranking reclutamiento: peso del valor técnico'),
- ('PESO_REC_INTERACCION',    0.10,  N'Ranking reclutamiento: peso de la interacción'),
- ('PESO_REC_AUDIO',          0.05,  N'Ranking reclutamiento: peso del pico de audio'),
+ ('PESO_REC_TECNICO',        1.00,  N'Ranking reclutamiento: peso del valor técnico'),
+ ('PESO_REC_INTERACCION',    0,     N'Ranking reclutamiento: peso de la interacción (popularidad; no evalúa al jugador)'),
+ ('PESO_REC_AUDIO',          0,     N'Ranking reclutamiento: peso del pico de audio (favorece goles y partidos con grada)'),
+ ('ENLACE_DIAS',             30,    N'Días de vigencia de un enlace para visores'),
  ('REEL_MAX_CLIPS',          25,    N'Máximo de jugadas en un reel'),
  ('REEL_MIN_CLIPS_RECOM',    12,    N'Mínimo recomendado de jugadas para un reel creíble'),
  ('REEL_PENAL_MISMO_TIPO',   0.80,  N'Penalización por cada jugada ya elegida del mismo tipo'),

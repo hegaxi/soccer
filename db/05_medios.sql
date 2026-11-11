@@ -140,7 +140,7 @@ BEGIN
     UPDATE med.Medio SET Eliminado = 1 WHERE MedioId = @MedioId;
     UPDATE fut.Jugador SET FotoMedioId = NULL WHERE FotoMedioId = @MedioId;
     -- Los reels que usaban jugadas de este video dejan de ser válidos hasta regenerarse
-    UPDATE r SET Estado = 'BORRADOR', TokenPublico = NULL
+    UPDATE r SET Estado = 'BORRADOR'
     FROM hl.Reel r WHERE EXISTS (SELECT 1 FROM hl.ReelClip rc JOIN hl.Clip c ON c.ClipId = rc.ClipId
                                  WHERE rc.ReelId = r.ReelId AND c.MedioId = @MedioId);
     DELETE rc FROM hl.ReelClip rc JOIN hl.Clip c ON c.ClipId = rc.ClipId WHERE c.MedioId = @MedioId;

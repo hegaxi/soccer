@@ -48,8 +48,8 @@ SQL no ve el video: puntúa señales. Cada jugada confirmada tiene tres componen
 | **Interacción** | me gusta y repeticiones por vista, con suavizado para que 2 de 2 no le gane a 150 de 500 |
 | **Audio** | pico de ruido ambiente dentro del clip (reacción de la grada o la banca) |
 
-Dos mezclas: **general** (55 / 35 / 10) para la galería y **reclutamiento** (85 / 10 / 5), porque a un visor le
-importa la ejecución y el contexto, no la popularidad. Todos los pesos están en `cat.Parametro`,
+Dos mezclas: **general** (55 / 35 / 10) para la galería y **reclutamiento** (100 % técnico): los «me gusta»
+miden popularidad y el audio favorece goles y partidos con grada; ninguno evalúa al jugador. Todos los pesos están en `cat.Parametro`,
 `cat.TipoEvento`, `cat.PesoPosicionEvento` y `cat.FasePartido`: se ajustan con un `UPDATE`, sin redesplegar.
 
 **Candidatos automáticos.** Al procesar un video se proponen momentos sin marcar: picos de audio y tramos que
@@ -63,11 +63,28 @@ varios usuarios regresaron a ver. El editor los confirma (jugador + tipo) o los 
 - Las mejores primero (el visor decide en los primeros 30 s) y una fuerte reservada para el cierre.
 - El video final lleva tarjeta inicial con los datos del jugador y, en cada jugada, un cuadro congelado con un
   recuadro que lo señala. Sale sin audio.
-- Se comparte con un enlace que no requiere cuenta y solo da acceso a ese video.
+- El video no lleva contacto ni fecha de nacimiento completa (solo «Categoría» = año de nacimiento y
+  «Class of» = año de graduación): un archivo descargado ya no se puede retirar.
 
 **Diagnóstico** (`hl.fn_Diagnostico`): dice qué le falta al material de un jugador según su posición — jugadas
-clave sin evidencia, nada con el pie no dominante, todo de un solo partido, nada ante rivales fuertes, jugadas
-sin señalar al jugador, perfil sin contacto.
+clave sin evidencia (bandera `EsClave` en `cat.PesoPosicionEvento`), nada con el pie no dominante, todo de un
+solo partido, nada ante rivales fuertes, jugadas sin señalar al jugador, falta de consentimiento del tutor,
+equipo sin contacto para visores.
+
+## Compartir con visores y protección de menores
+
+- **Consentimiento del tutor** (`fut.Consentimiento`): el reel de un menor de 18 años (o de un jugador sin
+  fecha de nacimiento) no se puede compartir sin una autorización vigente registrada en su ficha. Revocarla
+  corta el acceso de inmediato, porque el permiso se comprueba en cada visita.
+- **Un enlace por destinatario** (`hl.ReelEnlace`): con caducidad (30 días por defecto, parámetro
+  `ENLACE_DIAS`), retirable de forma individual y con conteo de aperturas.
+- **Lo que ve el visor**: el video, año de nacimiento y el **contacto del club** (se captura en
+  Administración → Equipos). El contacto personal o del tutor solo aparece si el jugador es mayor de edad o el
+  tutor lo autorizó expresamente.
+- La página y los archivos se sirven con `noindex` y el reproductor oculta la descarga (es disuasorio, no una
+  protección real; por eso el video no lleva datos personales).
+
+Esto no sustituye la revisión legal del aviso de privacidad y del formato de autorización del club.
 
 ## Puesta en marcha
 
@@ -116,21 +133,22 @@ node scripts/prueba.mjs un_video.mp4 una_foto.jpg
 ```
 
 Recorre sesión, permisos por rol, subida, procesamiento, candidatos por audio, puntaje, ranking, generación y
-render del reel, y el enlace público.
+render del reel, consentimiento del tutor y enlaces para visores.
 
 ## Roles
 
 | Rol | Puede |
 |---|---|
 | Espectador | ver galería y highlights, dar me gusta |
-| Editor / entrenador | subir, marcar jugadas, editar jugadores y partidos, generar y compartir reels |
+| Editor / entrenador | subir, marcar jugadas, editar jugadores y partidos, registrar consentimientos, generar y compartir reels |
 | Administrador | además, temporadas y usuarios |
 
 ## Estructura
 
 ```
 db/    01 tablas · 02 catálogos y pesos · 03 seguridad y resolvedor · 04 futbol · 05 medios
-       06 puntaje y highlights · 07 reels y diagnóstico · 08 internos · 09 catálogo de acciones
+       06 puntaje y highlights · 07 consentimiento, enlaces, reels y diagnóstico · 08 internos
+       09 catálogo de acciones · 10 migraciones de datos (se aplican una sola vez)
 api/   Controllers/ApiController.cs · Datos/EjecutorSp.cs · Datos/Almacen.cs · Trabajos/ProcesadorMedios.cs
 web/   src/paginas (Galeria, Subir, VideoDetalle, Highlights, Jugadores, ReelDetalle, ReelPublico, Admin)
 ```

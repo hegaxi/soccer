@@ -128,7 +128,7 @@ assert.ok(obs.some(o => /pie no dominante|contacto|nivel alto|Falta evidencia|So
 paso(`reel generado: ${orden.join(' → ')}`);
 console.log('   observaciones:\n' + obs.map(o => `     [${o.severidad}] ${o.mensaje}`).join('\n'));
 
-await exec('reel.publicar', { reelId }, { espera: 409 });                 // no se comparte sin renderizar
+await exec('reel.enlaceCrear', { reelId, destinatario: 'Visor de prueba' }, { espera: 409 });   // no se comparte sin renderizar
 await exec('reel.renderizar', { reelId });
 reel = await esperar(async () => {
   const [[r]] = await exec('reel.obtener', { reelId });
@@ -137,17 +137,57 @@ reel = await esperar(async () => {
 }, 'reel renderizado', 180);
 paso(`reel renderizado (${reel.duracionSeg}s)`);
 
-const [[{ tokenPublico }]] = await exec('reel.publicar', { reelId });
+// --- criterio de visoría
+assert.equal(golElite.puntajeReclutamiento, golElite.tecnico, 'el puntaje de reclutamiento es solo el valor técnico');
+const por = jugadores.find(j => j.posicionClave === 'POR');
+const [, coberturaPor, , diagPor] = await exec('jugador.obtener', { jugadorId: por.jugadorId });
+assert.ok(!diagPor.some(d => /Penal/.test(d.mensaje)), 'a un portero no se le exige un penal atajado');
+assert.ok(coberturaPor.some(c => c.nombre.startsWith('Saque') && c.esClave), 'la distribución sí es clave en un portero');
+paso('criterio: reclutamiento 100 % técnico; penal atajado no es exigible');
+
+// --- menores: sin consentimiento del tutor no hay enlace
+const negado = await exec('reel.enlaceCrear', { reelId, destinatario: 'Visor de prueba' }, { espera: 409 });
+assert.match(negado.error, /consentimiento/);
+const [[{ consentimientoId }]] = await exec('consentimiento.guardar', { jugadorId: dc.jugadorId, tutorNombre: 'Laura Soto', parentesco: 'Madre', fecha: '2026-09-01' });
+const [[{ token: tokenPublico, enlaceId }]] = await exec('reel.enlaceCrear', { reelId, destinatario: 'Visor de prueba', dias: 7 });
+const [[{ token: token2 }]] = await exec('reel.enlaceCrear', { reelId, destinatario: 'Universidad de prueba' });
+paso('consentimiento del tutor exigido para compartir el reel de un menor');
+
 const sesion = cookie; cookie = '';                                        // como un visor sin cuenta
 const [pub, pubClips] = await exec('reel.publico', { token: tokenPublico });
-assert.equal(pub[0].jugador, `${dc.nombre} ${dc.apellidos}`);
-assert.ok(pubClips.every(c => c.medioId === null), 'el enlace público no expone los videos fuente');
+const p = pub[0];
+assert.equal(p.jugador, `${dc.nombre} ${dc.apellidos}`);
+assert.equal(p.anioNacimiento, 2009);
+assert.ok(!('fechaNacimiento' in p) && !('correoContacto' in p) && !('telefonoContacto' in p), 'no se expone fecha de nacimiento ni contacto del menor');
+assert.equal(p.correoPersonal, null, 'el contacto personal no aparece sin autorización expresa');
+assert.match(p.contactoCorreo, /halconesfc/, 'se muestra el contacto del club');
+assert.ok(pubClips.every(c => c.medioId === null), 'el enlace no expone los videos fuente');
 const vid = await fetch(`${API}/api/archivo/reel/${reelId}?k=${tokenPublico}`, { headers: { Range: 'bytes=0-99' } });
 assert.equal(vid.status, 206);
+assert.match(vid.headers.get('x-robots-tag') ?? '', /noindex/);
 assert.equal((await fetch(`${API}/api/archivo/reel/${reelId}?k=otro`)).status, 401);
 assert.equal((await fetch(`${API}/api/archivo/${v1}?k=${tokenPublico}`)).status, 401);
 await exec('reel.publico', { token: 'noexiste' }, { espera: 404 });
-cookie = sesion;
-paso('enlace público: solo el reel renderizado');
+paso('enlace: solo el reel, año de nacimiento y contacto del club');
 
-console.log(`\nTodo correcto. reelId=${reelId} token=${tokenPublico} jugadorId=${dc.jugadorId} video=${v1}`);
+cookie = sesion;
+let [, , , enlaces] = await exec('reel.obtener', { reelId });
+assert.equal(enlaces.find(e => e.enlaceId === enlaceId).vistas, 1, 'cada apertura queda registrada');
+await exec('reel.enlaceRevocar', { enlaceId });
+cookie = '';
+await exec('reel.publico', { token: tokenPublico }, { espera: 404 });      // el retirado ya no abre…
+await exec('reel.publico', { token: token2 });                             // …y el otro destinatario no se ve afectado
+cookie = sesion;
+await exec('consentimiento.revocar', { consentimientoId });
+cookie = '';
+await exec('reel.publico', { token: token2 }, { espera: 404 });            // al revocar el tutor, todo deja de abrir
+assert.equal((await fetch(`${API}/api/archivo/reel/${reelId}?k=${token2}`)).status, 401);
+cookie = sesion;
+await exec('consentimiento.guardar', { jugadorId: dc.jugadorId, tutorNombre: 'Laura Soto', parentesco: 'Madre', fecha: '2026-09-02', permiteContacto: true });
+cookie = '';
+const [[conContacto]] = await exec('reel.publico', { token: token2 });
+assert.equal(conContacto.correoPersonal, 'diego.ramirez@example.com', 'con autorización de contacto sí aparece');
+cookie = sesion;
+paso('enlaces por destinatario: registro de vistas, retiro individual y revocación del tutor');
+
+console.log(`\nTodo correcto. reelId=${reelId} token=${token2} jugadorId=${dc.jugadorId} video=${v1}`);

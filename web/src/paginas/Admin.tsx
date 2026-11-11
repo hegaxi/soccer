@@ -21,7 +21,9 @@ export default function Admin() {
     { n: 'nivelRival', e: 'Nivel del rival', t: 'select', req: true, ayuda: 'Pesa en el puntaje de reclutamiento de cada jugada',
       op: [1, 2, 3, 4, 5].map(n => ({ v: n, e: `${n} · ${['Muy débil', 'Débil', 'Parejo', 'Fuerte', 'Élite'][n - 1]}` })) },
   ];
-  const cEquipo: Campo[] = [{ n: 'nombre', e: 'Nombre', req: true }, { n: 'categoria', e: 'Categoría' }, { n: 'esPropio', e: 'Es nuestro equipo', t: 'check' }];
+  const cEquipo: Campo[] = [{ n: 'nombre', e: 'Nombre', req: true }, { n: 'categoria', e: 'Categoría' }, { n: 'esPropio', e: 'Es nuestro equipo', t: 'check' },
+    { n: 'contactoNombre', e: 'Contacto para visores', ayuda: 'Coordinador o entrenador que atiende a los visores' }, { n: 'contactoCargo', e: 'Cargo' },
+    { n: 'contactoCorreo', e: 'Correo del contacto', t: 'email' }, { n: 'contactoTelefono', e: 'Teléfono del contacto' }];
   const cTemporada: Campo[] = [{ n: 'nombre', e: 'Nombre', req: true }, { n: 'fechaInicio', e: 'Inicio', t: 'date', req: true }, { n: 'fechaFin', e: 'Fin', t: 'date', req: true }, { n: 'activa', e: 'Temporada activa', t: 'check' }];
   const cUsuario = (nuevo: boolean): Campo[] => [{ n: 'nombre', e: 'Nombre', req: true }, { n: 'correo', e: 'Correo', t: 'email', req: true },
     { n: 'rol', e: 'Rol', t: 'select', op: [1, 2, 3].map(r => ({ v: r, e: ROLES[r] })), req: true },
@@ -48,9 +50,9 @@ export default function Admin() {
       </>}
 
       {tab === 'equipos' && <>
-        <div><button className="btn" onClick={() => setEd({ titulo: 'Nuevo equipo', accion: 'equipo.guardar', campos: cEquipo, inicial: { nombre: '', categoria: '', esPropio: false } })}>+ Nuevo equipo</button></div>
+        <div><button className="btn" onClick={() => setEd({ titulo: 'Nuevo equipo', accion: 'equipo.guardar', campos: cEquipo, inicial: { nombre: '', categoria: '', esPropio: false, contactoNombre: '', contactoCargo: '', contactoCorreo: '', contactoTelefono: '' } })}>+ Nuevo equipo</button></div>
         <table><thead><tr><th>Equipo</th><th>Categoría</th><th /><th /></tr></thead>
-          <tbody>{cat.equipos.map(e => <tr key={e.equipoId}><td><b>{e.nombre}</b></td><td className="tenue">{e.categoria}</td><td>{e.esPropio && <span className="etq verde">Nuestro equipo</span>}</td>
+          <tbody>{cat.equipos.map(e => <tr key={e.equipoId}><td><b>{e.nombre}</b></td><td className="tenue">{e.categoria}</td><td>{e.esPropio && <span className="etq verde">Nuestro equipo</span>} {e.esPropio && !e.contactoCorreo && !e.contactoTelefono && <span className="etq ambar">Sin contacto para visores</span>}</td>
             <td className="der"><button className="btn sec mini" onClick={() => setEd({ titulo: 'Editar equipo', accion: 'equipo.guardar', campos: cEquipo, inicial: e })}>Editar</button></td></tr>)}</tbody></table>
       </>}
 

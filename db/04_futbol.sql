@@ -9,7 +9,8 @@ BEGIN
   SELECT PosicionId, Clave, Nombre, Linea FROM cat.Posicion ORDER BY PosicionId;
   SELECT TipoEventoId, Clave, Nombre, Categoria, PesoBase, PreRollSeg, PostRollSeg FROM cat.TipoEvento ORDER BY TipoEventoId;
   SELECT Clave, Nombre, Factor FROM cat.FasePartido ORDER BY Orden;
-  SELECT EquipoId, Nombre, Categoria, EsPropio FROM fut.Equipo ORDER BY EsPropio DESC, Nombre;
+  SELECT EquipoId, Nombre, Categoria, EsPropio, ContactoNombre, ContactoCargo, ContactoCorreo, ContactoTelefono
+  FROM fut.Equipo ORDER BY EsPropio DESC, Nombre;
 END
 GO
 
@@ -42,25 +43,30 @@ END
 GO
 
 CREATE OR ALTER PROCEDURE api.usp_Equipo_Guardar
-  @EquipoId int = NULL, @Nombre nvarchar(100), @Categoria nvarchar(40) = NULL, @EsPropio bit = 0
+  @EquipoId int = NULL, @Nombre nvarchar(100), @Categoria nvarchar(40) = NULL, @EsPropio bit = 0,
+  @ContactoNombre nvarchar(120) = NULL, @ContactoCargo nvarchar(80) = NULL,
+  @ContactoCorreo nvarchar(200) = NULL, @ContactoTelefono nvarchar(40) = NULL
 AS
 BEGIN
   SET NOCOUNT ON;
   SET @Nombre = LTRIM(RTRIM(@Nombre));
   IF @Nombre = '' THROW 50400, N'El nombre del equipo es obligatorio', 1;
+  IF @ContactoCorreo IS NOT NULL AND @ContactoCorreo NOT LIKE '%_@_%._%' THROW 50400, N'Correo de contacto inválido', 1;
   IF EXISTS (SELECT 1 FROM fut.Equipo WHERE Nombre = @Nombre AND EquipoId <> ISNULL(@EquipoId, 0))
     THROW 50409, N'Ya existe un equipo con ese nombre', 1;
   IF @EquipoId IS NULL
   BEGIN
-    INSERT fut.Equipo(Nombre, Categoria, EsPropio) VALUES (@Nombre, @Categoria, @EsPropio);
+    INSERT fut.Equipo(Nombre, Categoria, EsPropio, ContactoNombre, ContactoCargo, ContactoCorreo, ContactoTelefono)
+    VALUES (@Nombre, @Categoria, @EsPropio, @ContactoNombre, @ContactoCargo, @ContactoCorreo, @ContactoTelefono);
     SET @EquipoId = SCOPE_IDENTITY();
   END
   ELSE
   BEGIN
-    UPDATE fut.Equipo SET Nombre=@Nombre, Categoria=@Categoria, EsPropio=@EsPropio WHERE EquipoId = @EquipoId;
+    UPDATE fut.Equipo SET Nombre=@Nombre, Categoria=@Categoria, EsPropio=@EsPropio, ContactoNombre=@ContactoNombre,
+           ContactoCargo=@ContactoCargo, ContactoCorreo=@ContactoCorreo, ContactoTelefono=@ContactoTelefono WHERE EquipoId = @EquipoId;
     IF @@ROWCOUNT = 0 THROW 50404, N'Equipo no encontrado', 1;
   END
-  SELECT EquipoId, Nombre, Categoria, EsPropio FROM fut.Equipo WHERE EquipoId = @EquipoId;
+  SELECT EquipoId = @EquipoId;
 END
 GO
 
@@ -116,7 +122,7 @@ AS
 BEGIN
   SET NOCOUNT ON;
   SELECT j.JugadorId, j.Nombre, j.Apellidos, j.Dorsal, j.PosicionId, Posicion = p.Nombre, PosicionClave = p.Clave,
-         j.PieDominante, j.EstaturaCm, j.AnioGraduacion, j.EquipoId, Equipo = e.Nombre, j.FotoMedioId, j.Activo,
+         j.PieDominante, j.EstaturaCm, j.AnioGraduacion, AnioNacimiento = YEAR(j.FechaNacimiento), j.EquipoId, Equipo = e.Nombre, j.FotoMedioId, j.Activo,
          Clips = (SELECT COUNT(*) FROM hl.Clip c JOIN med.Medio m ON m.MedioId = c.MedioId AND m.Eliminado = 0
                   WHERE c.JugadorId = j.JugadorId AND c.Estado = 'CONFIRMADO'),
          Reels = (SELECT COUNT(*) FROM hl.Reel r WHERE r.JugadorId = j.JugadorId)
