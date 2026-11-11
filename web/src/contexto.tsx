@@ -1,10 +1,10 @@
 import { createContext, useCallback, useContext, useEffect, useState, ReactNode } from 'react';
-import { exec } from './api';
+import { exec, ErrorApi } from './api';
 
 type Usuario = { usuarioId: number; nombre: string; correo: string; rol: number };
 type Catalogos = { temporadas: any[]; posiciones: any[]; tipos: any[]; fases: any[]; equipos: any[] };
 type Ctx = {
-  usuario: Usuario | null; cargando: boolean; esEditor: boolean; esAdmin: boolean;
+  usuario: Usuario | null; cargando: boolean; sinRed: boolean; reintentar: () => void; esEditor: boolean; esAdmin: boolean;
   entrar: (correo: string, clave: string) => Promise<void>; salir: () => Promise<void>;
   cat: Catalogos; recargarCat: () => Promise<void>;
   temporadaId: number | null; setTemporadaId: (id: number | null) => void;
@@ -25,12 +25,20 @@ export function Proveedor({ children }: { children: ReactNode }) {
     setTemporadaId(a => a ?? (temporadas.find(t => t.activa) ?? temporadas[0])?.temporadaId ?? null);
   }, []);
 
-  useEffect(() => {
-    exec('sesion.actual').then(([[u]]) => setUsuario(u ?? null)).catch(() => {}).finally(() => setCargando(false));
-    const fuera = () => setUsuario(null);
-    window.addEventListener('sesion-expirada', fuera);
-    return () => window.removeEventListener('sesion-expirada', fuera);
+  // Sin conexión no se sabe si hay sesión: se avisa en vez de mandar al usuario a iniciar sesión otra vez.
+  const [sinRed, setSinRed] = useState(false);
+  const reintentar = useCallback(() => {
+    setCargando(true);
+    exec('sesion.actual').then(([[u]]) => { setUsuario(u ?? null); setSinRed(false); })
+      .catch(e => setSinRed(!(e instanceof ErrorApi)))
+      .finally(() => setCargando(false));
   }, []);
+  useEffect(() => {
+    reintentar();
+    const fuera = () => setUsuario(null);
+    window.addEventListener('sesion-expirada', fuera); window.addEventListener('online', reintentar);
+    return () => { window.removeEventListener('sesion-expirada', fuera); window.removeEventListener('online', reintentar); };
+  }, [reintentar]);
   useEffect(() => { if (usuario) recargarCat().catch(() => {}); else { setCat(vacio); setTemporadaId(null); } }, [usuario, recargarCat]);
 
   const entrar = async (correo: string, clave: string) => {
@@ -41,7 +49,7 @@ export function Proveedor({ children }: { children: ReactNode }) {
 
   return (
     <C.Provider value={{
-      usuario, cargando, esEditor: (usuario?.rol ?? 0) >= 2, esAdmin: usuario?.rol === 3,
+      usuario, cargando, sinRed, reintentar, esEditor: (usuario?.rol ?? 0) >= 2, esAdmin: usuario?.rol === 3,
       entrar, salir, cat, recargarCat, temporadaId, setTemporadaId,
     }}>{children}</C.Provider>
   );

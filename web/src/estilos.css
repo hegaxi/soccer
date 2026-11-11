@@ -158,3 +158,5 @@ th { color: var(--tenue); font-weight: 600; font-size: 11px; text-transform: upp
 .publico { max-width: 980px; margin: 0 auto; padding: 24px 16px; }
 /* en teléfono los filtros ocupan todo el ancho en lugar de quedar disparejos */
 @media (max-width: 560px) { .fila > select, .fila > input:not([type=checkbox]):not([type=range]) { flex: 1 1 100%; } .fila > .segmento { flex: 1 1 100%; } .segmento button { flex: 1; justify-content: center; } }
+/* instalada en pantalla completa: respeta la muesca y la barra de gestos */
+@media (max-width: 900px) { .cabecera-movil { padding-top: calc(10px + env(safe-area-inset-top)); } }

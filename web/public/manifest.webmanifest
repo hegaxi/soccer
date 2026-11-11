@@ -1,0 +1,21 @@
+{
+  "name": "Soccer · Highlights y reclutamiento",
+  "short_name": "Soccer",
+  "description": "Videos, fotos y highlights de la temporada",
+  "lang": "es",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0a101c",
+  "theme_color": "#111a2b",
+  "icons": [
+    { "src": "/icono-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icono-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icono-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Highlights", "url": "/highlights" },
+    { "name": "Jugadores", "url": "/jugadores" }
+  ]
+}

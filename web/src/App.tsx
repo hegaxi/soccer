@@ -1,4 +1,4 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import { NavLink, Route, Routes, useLocation } from 'react-router-dom';
 import { useApp } from './contexto';
 import { ROLES } from './api';
@@ -14,11 +14,18 @@ import ReelPublico from './paginas/ReelPublico';
 import Admin from './paginas/Admin';
 
 export default function App() {
-  const { usuario, cargando, salir, esEditor, cat, temporadaId, setTemporadaId } = useApp();
+  const { usuario, cargando, sinRed, reintentar, salir, esEditor, cat, temporadaId, setTemporadaId } = useApp();
   const { pathname } = useLocation();
 
   if (pathname.startsWith('/r/')) return <Routes><Route path="/r/:token" element={<ReelPublico />} /></Routes>;
   if (cargando) return <div className="centro"><div className="girando" aria-label="Cargando" /></div>;
+  if (sinRed && !usuario) return (
+    <div className="centro"><div className="col" style={{ alignItems: 'center' }}>
+      <Logo t={56} /><h2 style={{ margin: 0, color: 'var(--texto)' }}>Sin conexión</h2>
+      <p style={{ margin: 0, maxWidth: 320 }}>Los videos y los datos están en el servidor. Revisa tu conexión; la app se reconecta sola.</p>
+      <button className="btn" onClick={reintentar}>Reintentar</button>
+    </div></div>
+  );
   if (!usuario) return <Login />;
 
   const secciones = [
@@ -44,6 +51,7 @@ export default function App() {
         <nav aria-label="Secciones">
           {secciones.map(s => <NavLink key={s.a} to={s.a} end={s.fin}><Icono n={s.i} /> <span>{s.e}</span></NavLink>)}
         </nav>
+        <Instalar />
         <div className="usuario">
           <div className="avatar chico">{usuario.nombre.slice(0, 1).toUpperCase()}</div>
           <div className="crece"><div className="nombre">{usuario.nombre}</div><div className="tenue chico">{ROLES[usuario.rol]}</div></div>
@@ -127,4 +135,17 @@ function Login() {
       </section>
     </div>
   );
+}
+
+/** Botón "Instalar app": aparece solo cuando el navegador ofrece instalarla y aún no está instalada. */
+function Instalar() {
+  const [oferta, setOferta] = useState<any>(null);
+  useEffect(() => {
+    const oye = (e: Event) => { e.preventDefault(); setOferta(e); };
+    const lista = () => setOferta(null);
+    window.addEventListener('beforeinstallprompt', oye); window.addEventListener('appinstalled', lista);
+    return () => { window.removeEventListener('beforeinstallprompt', oye); window.removeEventListener('appinstalled', lista); };
+  }, []);
+  if (!oferta) return null;
+  return <button className="btn sec" onClick={async () => { oferta.prompt(); await oferta.userChoice; setOferta(null); }}><Icono n="mas" t={16} /> Instalar app</button>;
 }

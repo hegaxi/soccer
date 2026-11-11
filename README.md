@@ -99,6 +99,14 @@ Configuración en `api/appsettings.json`: `Almacenamiento:Raiz` (carpeta de arch
 En producción la API debe ir detrás de HTTPS: la cookie de sesión se marca `Secure` solo si la petición llega
 por HTTPS.
 
+### Instalar como aplicación
+
+La interfaz es una SPA instalable (PWA): tiene manifiesto, iconos y un service worker (`web/public/sw.js`).
+En Chrome/Edge aparece «Instalar app» en la barra lateral y en la barra de direcciones; en iPhone,
+Compartir → «Agregar a inicio». El navegador solo ofrece instalar si el sitio se sirve por **HTTPS**
+(o en `localhost`). El service worker guarda únicamente la interfaz; datos, sesión y videos siempre van al
+servidor, así que sin conexión la app abre y avisa que no hay red.
+
 ### Prueba de punta a punta
 
 Con la API en marcha y los datos de demostración:
